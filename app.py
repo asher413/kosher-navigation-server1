@@ -189,7 +189,6 @@ def ask_gemini(prompt):
     except Exception:
         return "שגיאה בחיבור לבינה המלאכותית."
 
-
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr_logic(request: Request):
     p = request.query_params
