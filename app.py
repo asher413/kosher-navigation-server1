@@ -235,5 +235,5 @@ async def ivr_logic(request: Request):
         current_path = path if path else "ריק"
         return f"id_list_message=t-שגיאה. השלוחה הוגדרה כ-{current_path}. נא לבדוק את הגדרות ה-API"
 
-    if __name__ == "__main__":
+if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
