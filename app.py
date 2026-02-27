@@ -197,7 +197,7 @@ async def ivr_logic(request: Request):
     speech = p.get("search", "")
     digits = p.get("digits", "")
 
-# --- לוגיקה של יוטיוב ---
+    # --- לוגיקה של יוטיוב ---
     if path == "youtube":
         if not speech:
             return "read=t-נא לומר שם של שיר-search,no,speech,no,he-IL,no"
@@ -222,13 +222,13 @@ async def ivr_logic(request: Request):
 
         return f"id_list_message=t-{nav_res}&goto=/0"
 
-if path == "chat":
+    if path == "chat":
         if not speech: # אם המשתמש עוד לא דיבר
             return "read=t-מה השאלה שלך?-search,no,speech,no,he-IL,no"
         res = ask_gemini(speech)
         return f"id_list_message=t-{res[:400]}&goto=/0"
     
-# אם הגענו לכאן, סימן שאף if לא עבד (ה-path לא עבר נכון)
+    # אם הגענו לכאן, סימן שאף if לא עבד (ה-path לא עבר נכון)
         current_path = path if path else "ריק"
         return f"id_list_message=t-שגיאה. השלוחה הוגדרה כ-{current_path}. נא לבדוק את הגדרות ה-API"
 
