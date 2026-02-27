@@ -62,7 +62,16 @@ async def ivr_logic(request: Request):
         # אם המשתמש רק נכנס לשלוחה ולא הקיש כלום
         if not digits and not speech:
             return "read=t-לשירים חדשים הקש 1. לחיפוש קולי הקש 2.=selection,no,1,1,1,Ok,no"
-
+            
+# אפשרות 1 או דילוג (הקשה על 2 בזמן שיר)
+        if digits == "1" or digits == "2":
+            urls = get_yt_audio("שירים חדשים להיטים 2024", count=10)
+            if urls == "blocked": return "id_list_message=t-התוכן חסום"
+            url = random.choice(urls) if urls else None
+            if not url: return "id_list_message=t-לא נמצאו שירים"
+            # play_url_digits=2 מאפשר למשתמש להקיש 2 בזמן השיר כדי "לדלג" (לחזור לשרת)
+            return f"play_url={url}&play_url_control=yes&play_url_digits=2"
+        
         # אפשרות 1: שירים חדשים (מבצע חיפוש אוטומטי של להיטים חדשים)
         if digits == "1":
             search_query = "שירים חדשים 2024 להיטים"
@@ -80,7 +89,7 @@ async def ivr_logic(request: Request):
             if url == "blocked": return "id_list_message=t-התוכן חסום לשימוש"
             if not url: return "id_list_message=t-שיר לא נמצא"
             return f"play_url={url}"
-
+            
     # שלוחה 5: צ'אט הגיזרה | שלוחה 6: צ'אט הפרגוד (בינה מלאכותית)
     if path in ["chat_gizra", "chat_pargod"]:
         if not speech: return "read=t-שלום, אני הבינה המלאכותית. מה השאלה?-search,no,record,no"
