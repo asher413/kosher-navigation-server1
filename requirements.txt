@@ -5,3 +5,4 @@ pydantic
 yt-dlp
 python-multipart
 googlemaps
+gTTS
