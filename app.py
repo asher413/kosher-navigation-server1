@@ -1,44 +1,81 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
 import requests
+import yt_dlp
+import uvicorn
 
 app = FastAPI()
 
-# פונקציה למציאת קואורדינטות (קו רוחב וגובה) מכתובת
-def get_coords(address):
-    url = f"https://nominatim.openstreetmap.org/search?q={address}&format=json&limit=1"
-    headers = {'User-Agent': 'KosherNavApp/1.0'}
-    resp = requests.get(url, headers=headers).json()
-    if resp:
-        return f"{resp[0]['lon']},{resp[0]['lat']}"
-    return None
+# --- הגדרות אבטחה וסינון ---
+GEMINI_API_KEY = "AIzaSy..." # כאן המפתח שצירפת (מחקתי אותו לצורכי אבטחה בקוד הציבורי, שים אותו כאן)
+FORBIDDEN_WORDS = ["מילה1", "מילה2", "תוכן_לא_הולם"] # רשימת מילים אסורות לסינון
+BLOCKED_USERS = ["0501234567"] # רשימת מספרי טלפון חסומים
 
-class RouteRequest(BaseModel):
-    start: str
-    end: str
+def is_safe(text):
+    """פונקציה לבדיקת סינון תוכן"""
+    if not text: return True
+    return not any(word in text for word in FORBIDDEN_WORDS)
 
-@app.post("/route")
-def calculate_route(data: RouteRequest):
-    start_coords = get_coords(data.start)
-    end_coords = get_coords(data.end)
+def get_yt_audio(query):
+    """חיפוש ביוטיוב והחזרת קישור לשמיעה"""
+    if not is_safe(query): return "blocked"
+    ydl_opts = {'format': 'bestaudio/best', 'noplaylist': True, 'quiet': True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            title = info['entries'][0]['title']
+            if not is_safe(title): return "blocked"
+            return info['entries'][0]['url']
+        except: return None
 
-    if not start_coords or not end_coords:
-        return {"error": "אחת הכתובות לא נמצאה"}
+def ask_gemini(prompt):
+    """פנייה לבינה המלאכותית Gemini"""
+    if not is_safe(prompt): return "התוכן חסום."
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        return response.json()['candidates'][0]['content']['parts'][0]['text']
+    except: return "שגיאה בחיבור לבינה המלאכותית."
 
-    # פנייה למנוע הניווט החינמי OSRM
-    osrm_url = f"http://router.project-osrm.org/route/v1/driving/{start_coords};{end_coords}?overview=false"
-    route_resp = requests.get(osrm_url).json()
+@app.get("/ivr", response_class=PlainTextResponse)
+async def ivr_logic(request: Request):
+    p = request.query_params
+    phone = p.get("phone", "")
+    path = p.get("path", "")
+    speech = p.get("search", "") # הטקסט מההקלטה (ASR)
+    digits = p.get("Digits", "")
 
-    if "routes" not in route_resp:
-        return {"error": "לא נמצא מסלול"}
+    # בדיקת חסימה
+    if phone in BLOCKED_USERS:
+        return "id_list_message=t-הגישה חסומה&hangup"
 
-    distance_km = round(route_resp['routes'][0]['distance'] / 1000, 2)
-    duration_min = round(route_resp['routes'][0]['duration'] / 60)
+    # --- ניתוב שלוחות ---
+    
+    # שלוחה 1: וויז | שלוחה 2: מוביט
+    if path in ["waze", "moovit"]:
+        if not speech: return "read=t-לאן תרצה להגיע?-search,no,record,no"
+        return f"id_list_message=t-מחשב מסלול אל {speech}. המתן...&goto=/0"
 
-    return {
-        "start": data.start,
-        "end": data.end,
-        "distance": f"{distance_km} קילומטר",
-        "duration": f"{duration_min} דקות נסיעה",
-        "instructions": "כאן יבואו הנחיות הפנייה בשלב הבא"
-    }
+    # שלוחה 3: ספוטיפיי | שלוחה 4: יוטיוב
+    if path in ["spotify", "youtube"]:
+        if not speech: return "read=t-אמור שם של שיר או אמן-search,no,record,no"
+        url = get_yt_audio(speech)
+        if url == "blocked": return "id_list_message=t-התוכן חסום לשימוש"
+        if not url: return "id_list_message=t-שיר לא נמצא"
+        return f"play_url={url}"
+
+    # שלוחה 5: צ'אט הגיזרה | שלוחה 6: צ'אט הפרגוד (בינה מלאכותית)
+    if path in ["chat_gizra", "chat_pargod"]:
+        if not speech: return "read=t-שלום, אני הבינה המלאכותית. מה השאלה?-search,no,record,no"
+        res = ask_gemini(speech)
+        return f"id_list_message=t-{res[:400]}&goto=/0"
+
+    # החלפת מספר מערכת (דוגמה ללוגיקה)
+    if path == "change_num":
+        return "id_list_message=t-המספר יוחלף בתוך 24 שעות"
+
+    return "id_list_message=t-ברוכים הבאים למערכת החכמה&goto=/0"
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
