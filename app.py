@@ -10,8 +10,8 @@ from datetime import datetime
 app = FastAPI()
 
 # --- הגדרות אבטחה, סינון ומפתחות ---
-GEMINI_API_KEY = "AIzaSyAmvM0-tYt9cCXT3N-xAOIDECo3UuMnNG8"
-GOOGLE_MAPS_KEY = "AIzaSyAmvM0-tYt9cCXT3N-xAOIDECo3UuMnNG8"
+GEMINI_API_KEY = "AIzaSyCG7bz2Ew0IpyQHzYX4ZqwSIXf9navfsNw"
+GOOGLE_MAPS_KEY = "AIzaSyCG7bz2Ew0IpyQHzYX4ZqwSIXf9navfsNw"
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_KEY)
 
 FORBIDDEN_WORDS = ["מילה1", "מילה2", "תוכן_לא_הולם"]
