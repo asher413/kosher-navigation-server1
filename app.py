@@ -57,13 +57,29 @@ async def ivr_logic(request: Request):
         if not speech: return "read=t-לאן תרצה להגיע?-search,no,record,no"
         return f"id_list_message=t-מחשב מסלול אל {speech}. המתן...&goto=/0"
 
-    # שלוחה 3: ספוטיפיי | שלוחה 4: יוטיוב
+# --- שלוחה 3: ספוטיפיי | שלוחה 4: יוטיוב ---
     if path in ["spotify", "youtube"]:
-        if not speech: return "read=t-אמור שם של שיר או אמן-search,no,record,no"
-        url = get_yt_audio(speech)
-        if url == "blocked": return "id_list_message=t-התוכן חסום לשימוש"
-        if not url: return "id_list_message=t-שיר לא נמצא"
-        return f"play_url={url}"
+        # אם המשתמש רק נכנס לשלוחה ולא הקיש כלום
+        if not digits and not speech:
+            return "read=t-לשירים חדשים הקש 1. לחיפוש קולי הקש 2.=selection,no,1,1,1,Ok,no"
+
+        # אפשרות 1: שירים חדשים (מבצע חיפוש אוטומטי של להיטים חדשים)
+        if digits == "1":
+            search_query = "שירים חדשים 2024 להיטים"
+            url = get_yt_audio(search_query)
+            if url == "blocked": return "id_list_message=t-התוכן חסום"
+            return f"play_url={url}"
+
+        # אפשרות 2: מעבר לחיפוש קולי
+        if digits == "2":
+            return "read=t-נא לומר את שם השיר או האמן לחיפוש-search,no,record,no"
+
+        # עיבוד תוצאת החיפוש הקולי (אם המערכת כבר הקליטה)
+        if speech:
+            url = get_yt_audio(speech)
+            if url == "blocked": return "id_list_message=t-התוכן חסום לשימוש"
+            if not url: return "id_list_message=t-שיר לא נמצא"
+            return f"play_url={url}"
 
     # שלוחה 5: צ'אט הגיזרה | שלוחה 6: צ'אט הפרגוד (בינה מלאכותית)
     if path in ["chat_gizra", "chat_pargod"]:
