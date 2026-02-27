@@ -10,12 +10,12 @@ from datetime import datetime
 app = FastAPI()
 
 # --- הגדרות אבטחה, סינון ומפתחות ---
-# שים לב: הכנס כאן את המפתחות האמיתיים שלך
-GEMINI_API_KEY = AIzaSyCeynYAHj3yDGfnXHAuBg97qyEk5e0gF98
-GOOGLE_MAPS_KEY = AIzaSyCeynYAHj3yDGfnXHAuBg97qyEk5e0gF98
+# שימוש בגרשיים מסביב למפתחות
+GEMINI_API_KEY = "AIzaSyAmvM0-tYt9cCXT3N-xAOIDECo3UuMnNG8"
+GOOGLE_MAPS_KEY = "AIzaSyAmvM0-tYt9cCXT3N-xAOIDECo3UuMnNG8"
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_KEY)
 
-FORBIDDEN_WORDS = ["מילה1", "מילה2", "תוכן_לא_הולם"] 
+FORBIDDEN_WORDS = ["מילה1", "מילה2", "תוכן_לא_הולם"]
 BLOCKED_USERS = ["0501234567"]
 
 def is_safe(text):
@@ -39,28 +39,52 @@ def get_yt_audio(query, count=1):
                 return urls
         except: return None
 
-def get_navigation(origin, destination, mode="driving"):
-    """מחשב מסלול ומחזיר הוראות קוליות"""
+def get_free_navigation(origin, destination):
+    """מערכת ניווט חינמית כגיבוי (OSM)"""
     try:
+        base_geo = "https://nominatim.openstreetmap.org/search"
+        headers = {'User-Agent': 'MyIVRSystem/1.0'}
+        
+        orig_geo = requests.get(f"{base_geo}?q={origin}&format=json", headers=headers).json()
+        dest_geo = requests.get(f"{base_geo}?q={destination}&format=json", headers=headers).json()
+        
+        if not orig_geo or not dest_geo:
+            return "לא הצלחתי למצוא את הכתובת במערכת החינמית."
+
+        osrm_url = f"http://router.project-osrm.org/route/v1/driving/{orig_geo[0]['lon']},{orig_geo[0]['lat']};{dest_geo[0]['lon']},{dest_geo[0]['lat']}?overview=false&steps=true"
+        route_res = requests.get(osrm_url).json()
+        
+        steps = route_res['routes'][0]['legs'][0]['steps']
+        instructions = ["שימוש במערכת גיבוי חינמית."]
+        for step in steps[:3]:
+            instructions.append(f"בעוד {int(step['distance'])} מטרים, {step['maneuver']['instruction']}")
+        
+        return ". ".join(instructions)
+    except:
+        return "שתי מערכות הניווט אינן זמינות כרגע."
+
+def get_navigation(origin, destination, mode="driving"):
+    """מנסה גוגל, ואם נכשל עובר לחינמי"""
+    try:
+        # ניסיון ראשון: Google Maps
         now = datetime.now()
         directions = gmaps.directions(origin, destination, mode=mode, departure_time=now, language='he')
         
-        if not directions:
-            return "לא נמצא מסלול מתאים."
+        if directions:
+            leg = directions[0]['legs'][0]
+            steps = leg['steps']
+            instructions = [f"מסלול גוגל מ{leg['start_address']} ל{leg['end_address']}."]
+            for step in steps[:4]:
+                clean_instr = step['html_instructions'].replace('<b>', '').replace('</b>', '').replace('<div style="font-size:0.9em">', ' ').replace('</div>', '')
+                instructions.append(f"בעוד {step['distance']['text']}, {clean_instr}")
+            return ". ".join(instructions)
+        else:
+            return get_free_navigation(origin, destination)
             
-        leg = directions[0]['legs'][0]
-        steps = leg['steps']
-        
-        instructions = [f"המסלול מ{leg['start_address']} ל{leg['end_address']}. זמן משוער {leg['duration']['text']}."]
-        for step in steps[:4]: 
-            clean_instr = step['html_instructions'].replace('<b>', '').replace('</b>', '').replace('<div style="font-size:0.9em">', ' ').replace('</div>', '')
-            instructions.append(f"בעוד {step['distance']['text']}, {clean_instr}")
-            
-        return ". ".join(instructions)
     except Exception as e:
-        print(f"Error in nav: {e}")
-        return "שגיאה בחישוב המסלול. וודא שהכתובות נכונות."
-
+        print(f"Google API Error, switching to Free: {e}")
+        return get_free_navigation(origin, destination)
+        
 def ask_gemini(prompt):
     """פנייה לבינה המלאכותית Gemini"""
     if not is_safe(prompt): return "התוכן חסום."
