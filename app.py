@@ -11,8 +11,8 @@ import os
 app = FastAPI()
 
 # --- מפתחות מהסביבה ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GOOGLE_MAPS_KEY = os.getenv("GOOGLE_MAPS_KEY")
+GEMINI_API_KEY = "AIzaSyCG7bz2Ew0IpyQHzYX4ZqwSIXf9navfsNw"
+GOOGLE_MAPS_KEY = "AIzaSyCG7bz2Ew0IpyQHzYX4ZqwSIXf9navfsNw"
 
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_KEY) if GOOGLE_MAPS_KEY else None
 
@@ -37,6 +37,18 @@ def get_yt_audio(query, count=1):
         "no_warnings": True,
         "default_search": "ytsearch",
         "ignoreerrors": True,
+        "retries": 5,
+        "fragment_retries": 5,
+        "extractor_retries": 5,
+        "socket_timeout": 15,
+        "force_ipv4": True,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
     }
 
     try:
@@ -47,17 +59,18 @@ def get_yt_audio(query, count=1):
             if not info or "entries" not in info or not info["entries"]:
                 return None
 
-            if count == 1:
-                entry = info["entries"][0]
-                if not entry or not is_safe(entry.get("title", "")):
-                    return "blocked"
-                return entry.get("url")
-
-            return [
-                e["url"]
-                for e in info["entries"]
+            valid_entries = [
+                e for e in info["entries"]
                 if e and is_safe(e.get("title", ""))
             ]
+
+            if not valid_entries:
+                return None
+
+            if count == 1:
+                return valid_entries[0].get("url")
+
+            return [e.get("url") for e in valid_entries if e.get("url")]
 
     except Exception as e:
         print(f"YouTube Error: {e}")
@@ -91,8 +104,11 @@ def get_free_navigation(origin, destination):
         )
 
         route_res = requests.get(osrm_url, timeout=10).json()
-        steps = route_res["routes"][0]["legs"][0]["steps"]
 
+        if "routes" not in route_res or not route_res["routes"]:
+            return "לא נמצאה דרך זמינה."
+
+        steps = route_res["routes"][0]["legs"][0]["steps"]
         instructions = ["שימוש במערכת גיבוי חינמית."]
 
         for step in steps[:3]:
@@ -162,7 +178,7 @@ def ask_gemini(prompt):
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
-        response = requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=15)
         data = response.json()
 
         if "candidates" not in data:
@@ -181,12 +197,17 @@ async def ivr_logic(request: Request):
     speech = p.get("search", "")
     digits = p.get("digits", "")
 
+# --- לוגיקה של יוטיוב ---
     if path == "youtube":
         if not speech:
             return "read=t-נא לומר שם של שיר-search,no,speech,no,he-IL,no"
-
-        return f"id_list_message=t-חיפשת את {speech}&hangup"
-
+        audio_url = get_yt_audio(speech)
+        if audio_url == "blocked":
+            return "id_list_message=t-התוכן חסום&goto=/0"
+        if not audio_url:
+            return "id_list_message=t-לא נמצא שיר מתאים&goto=/0"
+        return f"play_url={audio_url}&play_url_control=yes"
+        
     if path in ["waze", "moovit"]:
         origin = p.get("origin_text", "")
 
