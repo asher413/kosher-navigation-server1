@@ -222,15 +222,15 @@ async def ivr_logic(request: Request):
 
         return f"id_list_message=t-{nav_res}&goto=/0"
 
-    if path == "chat":
-        if not speech:
-            return "read=t-מה השאלה שלך?-search,no,speech,yes,he-IL,no"
-
+if path == "chat":
+        if not speech: # אם המשתמש עוד לא דיבר
+            return "read=t-מה השאלה שלך?-search,no,speech,no,he-IL,no"
         res = ask_gemini(speech)
         return f"id_list_message=t-{res[:400]}&goto=/0"
-
-    return "id_list_message=t-ברוכים הבאים למערכת החכמה&goto=/0"
-
+    
+# אם הגענו לכאן, סימן שאף if לא עבד (ה-path לא עבר נכון)
+        current_path = path if path else "ריק"
+        return f"id_list_message=t-שגיאה. השלוחה הוגדרה כ-{current_path}. נא לבדוק את הגדרות ה-API"
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
