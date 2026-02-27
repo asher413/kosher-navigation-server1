@@ -137,14 +137,19 @@ def ask_gemini(prompt):
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr_logic(request: Request):
     p = request.query_params
-    phone = p.get("phone", "")
     path = p.get("path", "")
     speech = p.get("search", "")
-    digits = p.get("Digits", "")
 
-    if phone in BLOCKED_USERS:
-        return "id_list_message=t-הגישה חסומה&hangup"
+    # בדיקה פשוטה מאוד
+    if path == "youtube":
+        if not speech:
+            # ננסה פקודת read הכי בסיסית שיש
+            return "read=t-נא לומר שם של שיר-search,no,speech,no,he-IL,no"
+        
+        # אם הוא כבר אמר משהו, נגיד לו מה הוא אמר
+        return f"id_list_message=t-חיפשת את {speech}&hangup"
 
+    return "id_list_message=t-שלום, השרת מחובר בהצלחה&hangup"
     if path in ["waze", "moovit"]:
         origin = p.get("origin_text", "")
         if not origin:
