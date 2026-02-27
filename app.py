@@ -192,11 +192,11 @@ def ask_gemini(prompt):
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr_logic(request: Request):
     p = request.query_params
-    
+
     # התיקון הקריטי: לוקח רק את המילה שלפני סימן השאלה אם קיים
     raw_path = p.get("path", "")
-    path = raw_path.split('?')[0].strip() 
-    
+    path = raw_path.split('?')[0].strip()
+
     speech = p.get("search", "")
 
     # --- צ'אט בינה מלאכותית ---
