@@ -10,7 +10,6 @@ from datetime import datetime
 app = FastAPI()
 
 # --- הגדרות אבטחה, סינון ומפתחות ---
-# שימוש בגרשיים מסביב למפתחות
 GEMINI_API_KEY = "AIzaSyAmvM0-tYt9cCXT3N-xAOIDECo3UuMnNG8"
 GOOGLE_MAPS_KEY = "AIzaSyAmvM0-tYt9cCXT3N-xAOIDECo3UuMnNG8"
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_KEY)
@@ -66,7 +65,6 @@ def get_free_navigation(origin, destination):
 def get_navigation(origin, destination, mode="driving"):
     """מנסה גוגל, ואם נכשל עובר לחינמי"""
     try:
-        # ניסיון ראשון: Google Maps
         now = datetime.now()
         directions = gmaps.directions(origin, destination, mode=mode, departure_time=now, language='he')
         
@@ -110,10 +108,12 @@ async def ivr_logic(request: Request):
     if path in ["waze", "moovit"]:
         origin = p.get("origin_text", "")
         if not origin:
-            return "read=t-נא לומר בקול את נקודת המוצא-origin_text,no,record,no"
+            # זיהוי קולי משופר לנקודת מוצא
+            return "read=t-נא לומר בקול את נקודת המוצא-origin_text,no,speech,yes,he-IL,no"
         
         if not speech: 
-            return "read=t-לאן תרצה להגיע?-search,no,record,no"
+            # זיהוי קולי משופר ליעד
+            return "read=t-לאן תרצה להגיע?-search,no,speech,yes,he-IL,no"
         
         mode = "driving" if path == "waze" else "transit"
         nav_res = get_navigation(origin, speech, mode=mode)
@@ -131,7 +131,8 @@ async def ivr_logic(request: Request):
             return f"play_url={url}&play_url_control=yes&play_url_digits=2"
         
         if digits == "2":
-            return "read=t-נא לומר את שם השיר לחיפוש-search,no,record,no"
+            # זיהוי קולי לשם השיר
+            return "read=t-נא לומר את שם השיר לחיפוש-search,no,speech,yes,he-IL,no"
 
         if speech:
             url = get_yt_audio(speech)
@@ -141,7 +142,9 @@ async def ivr_logic(request: Request):
             
     # --- שלוחה 5/6: בינה מלאכותית ---
     if path in ["chat_gizra", "chat_pargod"]:
-        if not speech: return "read=t-מה השאלה שלך?-search,no,record,no"
+        if not speech:
+            # זיהוי קולי משופר לשאלה חופשית
+            return "read=t-מה השאלה שלך?-search,no,speech,yes,he-IL,no"
         res = ask_gemini(speech)
         return f"id_list_message=t-{res[:400]}&goto=/0"
 
