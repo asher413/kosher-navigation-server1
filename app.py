@@ -201,12 +201,15 @@ async def ivr_logic(request: Request):
     if path == "youtube":
         if not speech:
             return "read=t-נא לומר שם של שיר-search,no,speech,no,he-IL,no"
-        audio_url = get_yt_audio(speech)
-        if audio_url == "blocked":
-            return "id_list_message=t-התוכן חסום&goto=/0"
-        if not audio_url:
-            return "id_list_message=t-לא נמצא שיר מתאים&goto=/0"
-        return f"play_url={audio_url}&play_url_control=yes"
+        
+        ydl_opts = {"format": "bestaudio/best", "noplaylist": True, "quiet": True, "default_search": "ytsearch1"}
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"ytsearch1:{speech}", download=False)
+                audio_url = info['entries'][0]['url']
+                return f"play_url={audio_url}&play_url_control=yes"
+        except:
+            return "id_list_message=t-לא נמצא שיר מתאים"
         
     if path in ["waze", "moovit"]:
         origin = p.get("origin_text", "")
@@ -232,5 +235,5 @@ async def ivr_logic(request: Request):
         current_path = path if path else "ריק"
         return f"id_list_message=t-שגיאה. השלוחה הוגדרה כ-{current_path}. נא לבדוק את הגדרות ה-API"
 
-if __name__ == "__main__":
+    if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
