@@ -193,15 +193,29 @@ def ask_gemini(prompt):
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr_logic(request: Request):
     p = request.query_params
-    path = p.get("path", "")
+    
+    # התיקון הקריטי: לוקח רק את המילה שלפני סימן השאלה אם קיים
+    raw_path = p.get("path", "")
+    path = raw_path.split('?')[0].strip() 
+    
     speech = p.get("search", "")
-    digits = p.get("digits", "")
 
-    # --- לוגיקה של יוטיוב ---
+    # --- צ'אט בינה מלאכותית ---
+    if path == "chat":
+        if not speech:
+            return "read=t-מה השאלה שלך?-search,no,speech,no,he-IL,no"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        try:
+            res = requests.post(url, json={"contents": [{"parts": [{"text": speech}]}]}, timeout=10).json()
+            text = res["candidates"][0]["content"]["parts"][0]["text"]
+            return f"id_list_message=t-{text[:400]}"
+        except:
+            return "id_list_message=t-שגיאה בחיבור לבינה"
+
+    # --- יוטיוב ---
     if path == "youtube":
         if not speech:
             return "read=t-נא לומר שם של שיר-search,no,speech,no,he-IL,no"
-        
         ydl_opts = {"format": "bestaudio/best", "noplaylist": True, "quiet": True, "default_search": "ytsearch1"}
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -210,26 +224,30 @@ async def ivr_logic(request: Request):
                 return f"play_url={audio_url}&play_url_control=yes"
         except:
             return "id_list_message=t-לא נמצא שיר מתאים"
-        
+
+    # --- ניווט ---
     if path in ["waze", "moovit"]:
         origin = p.get("origin_text", "")
-
         if not origin:
-            return "read=t-נא לומר את נקודת המוצא-origin_text,no,speech,yes,he-IL,no"
-
+            return "read=t-נא לומר את נקודת המוצא-origin_text,no,speech,no,he-IL,no"
         if not speech:
-            return "read=t-לאן תרצה להגיע?-search,no,speech,yes,he-IL,no"
+            return "read=t-לאן תרצה להגיע?-search,no,speech,no,he-IL,no"
+        try:
+            mode = "driving" if path == "waze" else "transit"
+            directions = gmaps.directions(origin, speech, mode=mode, language="he")
+            if not directions:
+                return "id_list_message=t-לא נמצא מסלול זמין"
+            leg = directions[0]["legs"][0]
+            msg = f"מסלול מ{leg['start_address']} ל{leg['end_address']}. "
+            for step in leg["steps"][:3]:
+                instr = step["html_instructions"].replace("<b>","").replace("</b>","").replace("</div>","")
+                msg += f"בעוד {step['distance']['text']}, {instr}. "
+            return f"id_list_message=t-{msg[:400]}"
+        except:
+            return "id_list_message=t-שגיאה בשירות הניווט"
 
-        mode = "driving" if path == "waze" else "transit"
-        nav_res = get_navigation(origin, speech, mode=mode)
-
-        return f"id_list_message=t-{nav_res}&goto=/0"
-
-    if path == "chat":
-        if not speech: # אם המשתמש עוד לא דיבר
-            return "read=t-מה השאלה שלך?-search,no,speech,no,he-IL,no"
-        res = ask_gemini(speech)
-        return f"id_list_message=t-{res[:400]}&goto=/0"
+    # הודעת דיבוב למקרה שזה עדיין לא מזהה
+    return f"id_list_message=t-המערכת זיהתה נתיב בשם {path}"
     
     # אם הגענו לכאן, סימן שאף if לא עבד (ה-path לא עבר נכון)
         current_path = path if path else "ריק"
