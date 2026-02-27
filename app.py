@@ -11,8 +11,8 @@ app = FastAPI()
 
 # --- הגדרות אבטחה, סינון ומפתחות ---
 # שים לב: הכנס כאן את המפתחות האמיתיים שלך
-GEMINI_API_KEY = "AIzaSy..." 
-GOOGLE_MAPS_KEY = "YOUR_GOOGLE_MAPS_KEY"
+GEMINI_API_KEY = AIzaSyCeynYAHj3yDGfnXHAuBg97qyEk5e0gF98
+GOOGLE_MAPS_KEY = AIzaSyCeynYAHj3yDGfnXHAuBg97qyEk5e0gF98
 gmaps = googlemaps.Client(key=GOOGLE_MAPS_KEY)
 
 FORBIDDEN_WORDS = ["מילה1", "מילה2", "תוכן_לא_הולם"] 
