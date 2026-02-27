@@ -2,6 +2,6 @@ fastapi
 uvicorn
 requests
 pydantic
-gTTS
 yt-dlp
 python-multipart
+googlemaps
