@@ -118,62 +118,7 @@ async def global_middleware(request: Request, call_next):
         return JSONResponse(status_code=500, content={"error": "Server error"})
 
 # --------------------------------------------------
-# YouTube Search
-# --------------------------------------------------
-
-async def search_youtube(query: str) -> List[Dict]:
-    if not YOUTUBE_API_KEY:
-        logger.warning("YouTube API key missing")
-        return []
-
-    cache_key = f"yt:{query}"
-    cached = get_cache(cache_key)
-    if cached:
-        return cached
-
-    async def call():
-        params = {
-            "part": "snippet",
-            "q": query,
-            "key": YOUTUBE_API_KEY,
-            "maxResults": 20,
-            "type": "video"
-        }
-        r = await app.state.async_client.get(YOUTUBE_SEARCH_URL, params=params)
-        r.raise_for_status()
-        data = r.json()
-        return [
-            {
-                "title": item["snippet"]["title"],
-                "video_id": item["id"]["videoId"]
-            }
-            for item in data.get("items", [])
-        ]
-
-    results = await retry_request(call)
-    set_cache(cache_key, results)
-    return results
-
-# --------------------------------------------------
-# yt_dlp Extractor
-# --------------------------------------------------
-
-async def extract_audio_info(video_id: str):
-    loop = asyncio.get_event_loop()
-    url = f"https://www.youtube.com/watch?v={video_id}"
-
-    def run():
-        with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
-            return ydl.extract_info(url, download=False)
-
-    try:
-        return await loop.run_in_executor(None, run)
-    except Exception as e:
-        logger.error(f"Extraction error: {e}")
-        return {"error": str(e)}
-
-# --------------------------------------------------
-# IVR Endpoint (ימות המשיח - תקין)
+# IVR MENU (UPDATED WITH KEYPAD NAVIGATION)
 # --------------------------------------------------
 
 @app.get("/ivr", response_class=PlainTextResponse)
@@ -182,20 +127,62 @@ async def ivr(
     ApiPhone: str = "",
     ApiExtension: str = "",
     path: str = "",
+    DTMF: str = "",
+    search_query: str = None,  # מקבל את הטקסט מהקלטת הקול
     hangup: str = ""
 ):
-    logger.info(f"IVR call | phone={ApiPhone} | ext={ApiExtension} | path={path}")
+    logger.info(f"IVR call | phone={ApiPhone} | path={path} | dtmf={DTMF} | query={search_query}")
 
     if hangup == "yes":
-        logger.info("Call ended")
         return ""
 
-    if path == "waze":
-        return "id_list_message=t-ניווט הופעל"
-    elif path == "search":
-        return "id_list_message=t-חיפוש הופעל"
-    else:
-        return "id_list_message=t-ברוכים הבאים למערכת. להמשך בחר שלוחה."
+    # שלב 1: אם המשתמש עוד לא הקיש כלום ולא חיפש כלום - נשמיע תפריט
+    if not DTMF and not search_query:
+        return (
+            "read=t-ברוכים הבאים למערכת. "
+            "לניווט הקש 1. "
+            "למוביט הקש 2. "
+            "ליוטיוב הקש 3. "
+            "לספוטיפיי הקש 4. "
+            "לבינה מלאכותית הקש 5.=DTMF,yes,1,1,1,Digits,no"
+        )
+
+    # שלב 2: טיפול בבחירות התפריט (לפני חיפוש קולי)
+    if DTMF and not search_query:
+        if DTMF == "1":
+            return "id_list_message=t-מערכת ניווט הופעלה."
+        
+        elif DTMF == "2":
+            return "read=t-נא אמרו יעד למוביט=search_query,no,he,1,5,7"
+        
+        elif DTMF == "3":
+            return "read=t-נא אמרו את שם השיר לחיפוש ביוטיוב=search_query,no,he,1,5,7"
+        
+        elif DTMF == "4":
+            return "read=t-נא אמרו את שם השיר לחיפוש בספוטיפיי=search_query,no,he,1,5,7"
+        
+        elif DTMF == "5":
+            return "id_list_message=t-מערכת בינה מלאכותית הופעלה."
+        
+        else:
+            return "id_list_message=t-בחירה לא תקינה. להתראות."
+
+    # שלב 3: טיפול בתוצאות החיפוש הקולי (אחרי שהמשתמש דיבר)
+    if search_query:
+        if DTMF == "3":  # חיפוש ביוטיוב
+            results = await search_youtube(search_query)
+            if results:
+                first_title = results[0]['title']
+                return f"id_list_message=t-מצאתי ביוטיוב את: {first_title}. מיד נשמיע."
+            return "id_list_message=t-לא נמצאו תוצאות ביוטיוב."
+
+        elif DTMF == "4":  # חיפוש בספוטיפיי (כאן תבוא הלוגיקה של ספוטיפיי בעתיד)
+            return f"id_list_message=t-מחפש בספוטיפיי את {search_query}. השירות בבנייה."
+
+        elif DTMF == "2":  # חיפוש במוביט/מיקום
+            return f"id_list_message=t-מחפש דרכי הגעה אל {search_query}."
+
+    return "id_list_message=t-תקלה במערכת."
 
 # --------------------------------------------------
 # Standard Endpoints
@@ -239,7 +226,7 @@ async def chat(request: ChatRequest):
     return {"response": smart_trim(f"תגובה עבור: {request.text}")}
 
 # --------------------------------------------------
-# TTS (Fixed - no crash)
+# TTS
 # --------------------------------------------------
 
 @app.get("/tts")
