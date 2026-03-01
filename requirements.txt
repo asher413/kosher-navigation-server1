@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pydantic
-yt-dlp>=2025.1.15
+yt-dlp
 python-multipart
 requests
 httpx
@@ -9,3 +9,4 @@ SpeechRecognition
 googlemaps
 gTTS
 geopy
+spotipy
