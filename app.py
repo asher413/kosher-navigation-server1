@@ -6,7 +6,7 @@ import time
 from typing import List, Dict, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 import httpx
@@ -97,13 +97,13 @@ async def retry_request(func, retries=3):
     for attempt in range(retries):
         try:
             return await func()
-        except Exception as e:
+        except Exception:
             if attempt == retries - 1:
                 raise
             await asyncio.sleep(2 ** attempt)
 
 # --------------------------------------------------
-# Middleware (Debug + Rate Limit)
+# Middleware
 # --------------------------------------------------
 
 @app.middleware("http")
@@ -173,25 +173,32 @@ async def extract_audio_info(video_id: str):
         return {"error": str(e)}
 
 # --------------------------------------------------
-# IVR Endpoint (Fix 404)
+# IVR Endpoint (ימות המשיח - תקין)
 # --------------------------------------------------
 
 @app.get("/ivr", response_class=PlainTextResponse)
-async def ivr_handler(request: Request):
-    params = request.query_params
-    logger.info(f"IVR params: {dict(params)}")
+async def ivr(
+    ApiCallId: str = "",
+    ApiPhone: str = "",
+    ApiExtension: str = "",
+    path: str = "",
+    hangup: str = ""
+):
+    logger.info(f"IVR call | phone={ApiPhone} | ext={ApiExtension} | path={path}")
 
-    path = params.get("path", "")
+    if hangup == "yes":
+        logger.info("Call ended")
+        return ""
 
     if path == "waze":
-        return "ניווט מופעל"
+        return "id_list_message=t-ניווט הופעל"
     elif path == "search":
-        return "חיפוש מופעל"
+        return "id_list_message=t-חיפוש הופעל"
     else:
-        return "תפריט ראשי"
+        return "id_list_message=t-ברוכים הבאים למערכת. להמשך בחר שלוחה."
 
 # --------------------------------------------------
-# Endpoints
+# Standard Endpoints
 # --------------------------------------------------
 
 @app.get("/health")
@@ -232,19 +239,22 @@ async def chat(request: ChatRequest):
     return {"response": smart_trim(f"תגובה עבור: {request.text}")}
 
 # --------------------------------------------------
-# TTS
+# TTS (Fixed - no crash)
 # --------------------------------------------------
 
 @app.get("/tts")
-async def text_to_speech(text: str, lang: str = "he"):
+async def text_to_speech(text: str, background_tasks: BackgroundTasks, lang: str = "he"):
     filename = f"/tmp/{uuid.uuid4()}.mp3"
-    try:
-        tts = gTTS(text=text, lang=lang)
-        tts.save(filename)
-        return FileResponse(filename, media_type="audio/mpeg")
-    finally:
-        if os.path.exists(filename):
-            os.remove(filename)
+    tts = gTTS(text=text, lang=lang)
+    tts.save(filename)
+
+    background_tasks.add_task(os.remove, filename)
+
+    return FileResponse(
+        filename,
+        media_type="audio/mpeg",
+        background=background_tasks
+    )
 
 # --------------------------------------------------
 # Maps
