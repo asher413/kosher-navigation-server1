@@ -103,20 +103,61 @@ async def retry_request(func, retries=3):
             await asyncio.sleep(2 ** attempt)
 
 # --------------------------------------------------
-# Middleware
+# Middleware - טיפול בשגיאות ומניעת ניתוקים
 # --------------------------------------------------
 
 @app.middleware("http")
 async def global_middleware(request: Request, call_next):
     logger.info(f"Incoming request: {request.url}")
-    rate_limit(request.client.host if request.client else "unknown")
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # הפעלת הגבלת קצב
+    try:
+        rate_limit(client_ip)
+    except HTTPException as e:
+        if "/ivr" in str(request.url):
+            return PlainTextResponse("id_list_message=t-עברת את מכסת הבקשות, נסה שוב מאוחר יותר")
+        raise e
+
     try:
         response = await call_next(request)
         return response
     except Exception as e:
         logger.error(f"Unhandled error: {e}")
+        # אם הבקשה מה-IVR, מחזירים טקסט כדי למנוע ניתוק שיחה
+        if "/ivr" in str(request.url):
+            return PlainTextResponse("id_list_message=t-חלה שגיאה במערכת, אנא נסו שוב.")
         return JSONResponse(status_code=500, content={"error": "Server error"})
 
+# --------------------------------------------------
+# YouTube & Audio Utilities - פונקציות עזר (חייבות להיות מחוץ למידלוור)
+# --------------------------------------------------
+
+async def search_youtube(query: str):
+    ydl_opts = {'quiet': True, 'noplaylist': True, 'extract_flat': True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            loop = asyncio.get_event_loop()
+            # חיפוש התוצאה הראשונה ביוטיוב
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch1:{query}", download=False))
+            if 'entries' in info and info['entries']:
+                return [{'title': info['entries'][0]['title'], 'video_id': info['entries'][0]['id']}]
+        except Exception as e:
+            logger.error(f"Youtube search error: {e}")
+    return None
+
+async def extract_audio_info(video_id: str):
+    ydl_opts = {'format': 'bestaudio/best', 'quiet': True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            loop = asyncio.get_event_loop()
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+            return {'url': info['url'], 'title': info['title']}
+        except Exception as e:
+            logger.error(f"Audio extraction error: {e}")
+            return {"error": str(e)}
+            
 # --------------------------------------------------
 # IVR MENU (UPDATED WITH KEYPAD NAVIGATION)
 # --------------------------------------------------
@@ -162,21 +203,25 @@ async def ivr(
         else:
             return "id_list_message=t-בחירה לא תקינה. להתראות."
 
-    # --- שלב 3: ביצוע הפעולה האמיתית (אחרי שהמשתמש דיבר) ---
+   # --- שלב 3: ביצוע הפעולה האמיתית ---
     if search_query:
-        # אופציה 3: יוטיוב (חיפוש אמיתי)
+        # אופציה 3: יוטיוב
         if DTMF == "3":
             results = await search_youtube(search_query)
             if results:
-                title = results[0]['title']
+                # שימוש ב-smart_trim כדי לוודא שהשם לא ארוך מדי או שובר את הפקודה
+                title = smart_trim(results[0]['title'], limit=100)
                 video_id = results[0]['video_id']
-                # מושך את ה-URL האמיתי של האודיו
+                
                 info = await extract_audio_info(video_id)
-                audio_url = info.get('url')
-                if audio_url:
-                    # משמיע את השיר ישירות בטלפון!
+                
+                # בדיקה שאין שגיאה במידע שחזר ושיש URL
+                if info and "url" in info:
+                    audio_url = info['url']
                     return f"id_list_message=t-מצאתי את {title}. השמעה נעימה.&playfile={audio_url}"
-                return f"id_list_message=t-מצאתי את {title}, אך לא ניתן להשמיע כרגע."
+                else:
+                    return f"id_list_message=t-מצאתי את {title}, אך לא ניתן להפיק קישור להשמעה."
+            
             return "id_list_message=t-לא נמצאו תוצאות ביוטיוב."
 
         # אופציה 2: מוביט / גוגל מפות (חיפוש מקום)
@@ -293,3 +338,9 @@ async def speech_to_text(file: UploadFile = File(...)):
     finally:
         if os.path.exists(unique_filename):
             os.remove(unique_filename)
+
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
