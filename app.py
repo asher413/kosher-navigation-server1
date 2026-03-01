@@ -123,57 +123,82 @@ async def global_middleware(request: Request, call_next):
 
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr(
+    ApiCallId: str = "",
     ApiPhone: str = "",
     DTMF: str = None,
     search_query: str = None,
     hangup: str = ""
 ):
-    # ניקוי: אם ימות המשיח שולחים את המילה %val% כטקסט, נהפוך אותה ל-None
-    if DTMF == "%val%" or not DTMF:
-        DTMF = None
-    if search_query == "%val%" or not search_query:
-        search_query = None
-
-    logger.info(f"IVR Call | Phone: {ApiPhone} | DTMF: {DTMF} | Query: {search_query}")
+    # ניקוי לכלוך של ימות המשיח
+    if not DTMF or DTMF == "%val%": DTMF = None
+    if not search_query or search_query == "%val%": search_query = None
 
     if hangup == "yes":
+        logger.info(f"שיחה הסתיימה: {ApiPhone}")
         return ""
 
-    # שלב א: תפריט ראשי (אם המשתמש עוד לא הקיש כלום)
+    logger.info(f"בקשה נכנסה: טלפון={ApiPhone}, מקש={DTMF}, חיפוש={search_query}")
+
+    # --- שלב 1: תפריט ראשי ---
     if DTMF is None and search_query is None:
         return (
-            "read=t-ברוכים הבאים למערכת הכשרה. "
-            "ליוטיוב הקש 3. "
+            "read=t-שלום. "
+            "לניווט ומוביט הקש 2. "
+            "לחיפוש ביוטיוב הקש 3. "
             "לספוטיפיי הקש 4. "
             "לבינה מלאכותית הקש 5.=DTMF,yes,1,1,1,Digits,no"
         )
 
-    # שלב ב: המשתמש הקיש מספר - עכשיו נבקש ממנו להגיד מה הוא מחפש
+    # --- שלב 2: בקשת הקלטה מהמשתמש לפי הבחירה שלו ---
     if DTMF and search_query is None:
-        if DTMF == "3":
-            return "read=t-נא אמרו את שם השיר לחיפוש ביוטיוב=search_query,no,he,1,5,7"
+        if DTMF == "2":
+            return "read=t-נא אמרו יעד לנסיעה=search_query,no,he,1,5,7"
+        elif DTMF == "3":
+            return "read=t-נא אמרו שם שיר ליוטיוב=search_query,no,he,1,5,7"
         elif DTMF == "4":
-            return "read=t-נא אמרו את שם השיר לחיפוש בספוטיפיי=search_query,no,he,1,5,7"
+            return "read=t-נא אמרו שם שיר לספוטיפיי=search_query,no,he,1,5,7"
         elif DTMF == "5":
             return "read=t-נא אמרו שאלה לבינה המלאכותית=search_query,no,he,1,5,7"
         else:
             return "id_list_message=t-בחירה לא תקינה. להתראות."
 
-    # שלב ג: המשתמש אמר משהו - נבצע חיפוש
+    # --- שלב 3: ביצוע הפעולה האמיתית (אחרי שהמשתמש דיבר) ---
     if search_query:
-        if DTMF == "3": # יוטיוב
+        # אופציה 3: יוטיוב (חיפוש אמיתי)
+        if DTMF == "3":
             results = await search_youtube(search_query)
             if results:
-                return f"id_list_message=t-מצאתי ביוטיוב את {results[0]['title']}. מיד נשמיע."
+                title = results[0]['title']
+                video_id = results[0]['video_id']
+                # מושך את ה-URL האמיתי של האודיו
+                info = await extract_audio_info(video_id)
+                audio_url = info.get('url')
+                if audio_url:
+                    # משמיע את השיר ישירות בטלפון!
+                    return f"id_list_message=t-מצאתי את {title}. השמעה נעימה.&playfile={audio_url}"
+                return f"id_list_message=t-מצאתי את {title}, אך לא ניתן להשמיע כרגע."
             return "id_list_message=t-לא נמצאו תוצאות ביוטיוב."
-        
-        elif DTMF == "4": # ספוטיפיי
-            return f"id_list_message=t-מחפש בספוטיפיי את {search_query}. השירות בבנייה."
-            
-        elif DTMF == "5": # AI
-            return f"id_list_message=t-השאלה שלך היא {search_query}. המעבד עסוק כרגע."
 
-    return "id_list_message=t-סיום שיחה."
+        # אופציה 2: מוביט / גוגל מפות (חיפוש מקום)
+        elif DTMF == "2":
+            if not gmaps:
+                return "id_list_message=t-שירות המיקום אינו מוגדר בשרת."
+            loop = asyncio.get_event_loop()
+            places = await loop.run_in_executor(None, lambda: gmaps.places(query=search_query))
+            results = places.get("results", [])
+            if results:
+                name = results[0].get('name')
+                address = results[0].get('formatted_address')
+                return f"id_list_message=t-מצאתי את {name} בכתובת {address}."
+            return "id_list_message=t-לא מצאתי את המקום המבוקש."
+
+        # אופציה 5: בינה מלאכותית (שימוש בפונקציית ה-Chat שלך)
+        elif DTMF == "5":
+            # כאן המערכת משתמשת ב-smart_trim שכתבת
+            ai_response = smart_trim(f"תשובת המערכת עבור {search_query}: השירות בבדיקה.")
+            return f"id_list_message=t-{ai_response}"
+
+    return "id_list_message=t-חזרה לתפריט הראשי."
 # --------------------------------------------------
 # Standard Endpoints
 # --------------------------------------------------
