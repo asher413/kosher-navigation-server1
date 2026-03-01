@@ -1,14 +1,18 @@
 import os
 import asyncio
 import logging
+import uuid
 from typing import List, Dict, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
 import yt_dlp
 import speech_recognition as sr
+import googlemaps
+from gtts import gTTS
 
 # --------------------------------------------------
 # Logging
@@ -36,10 +40,17 @@ app = FastAPI(title="Advanced Audio Search API", lifespan=lifespan)
 # --------------------------------------------------
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+
 YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
+
+# אתחול לקוח Google Maps
+gmaps = googlemaps.Client(key=MAPS_API_KEY) if MAPS_API_KEY else None
 
 if not YOUTUBE_API_KEY:
     logger.warning("YOUTUBE_API_KEY not set!")
+if not MAPS_API_KEY:
+    logger.warning("GOOGLE_MAPS_API_KEY not set!")
 
 # --------------------------------------------------
 # Models
@@ -62,12 +73,13 @@ def smart_trim(text: str, limit: int = 400) -> str:
     return text[:limit] + "... (הטקסט קוצר)"
 
 def is_safe(text: str) -> bool:
+    # כאן ניתן להוסיף מילים נוספות לסינון במידת הצורך
     forbidden = ["xxx", "badword"]
     lowered = text.lower()
     return not any(word in lowered for word in forbidden)
 
 # --------------------------------------------------
-# YouTube Search
+# YouTube Search Logic
 # --------------------------------------------------
 
 async def search_youtube(query: str) -> List[Dict]:
@@ -90,7 +102,6 @@ async def search_youtube(query: str) -> List[Dict]:
                 "title": item["snippet"]["title"],
                 "video_id": item["id"]["videoId"]
             })
-
         return results
 
     except Exception as e:
@@ -176,6 +187,40 @@ async def chat(request: ChatRequest):
     return {"response": smart_trim(response_text)}
 
 # --------------------------------------------------
+# New: Text To Speech (gTTS)
+# --------------------------------------------------
+
+@app.get("/tts")
+async def text_to_speech(text: str, lang: str = "he"):
+    try:
+        tts = gTTS(text=text, lang=lang)
+        # שימוש בנתיב זמני ייחודי
+        filename = f"/tmp/{uuid.uuid4()}.mp3"
+        tts.save(filename)
+        return FileResponse(filename, media_type="audio/mpeg")
+    except Exception as e:
+        logger.error(f"TTS error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --------------------------------------------------
+# New: Location Search (Google Maps)
+# --------------------------------------------------
+
+@app.get("/location/search")
+async def find_place(query: str):
+    if not gmaps:
+        raise HTTPException(status_code=500, detail="Google Maps API key not set")
+    
+    try:
+        loop = asyncio.get_event_loop()
+        # הרצה ב-executor כי הספרייה סינכרונית
+        places = await loop.run_in_executor(None, lambda: gmaps.places(query=query))
+        return {"results": places.get("results", [])}
+    except Exception as e:
+        logger.error(f"Maps error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --------------------------------------------------
 # Speech To Text (Cloud Compatible)
 # --------------------------------------------------
 
@@ -185,14 +230,22 @@ recognizer = sr.Recognizer()
 async def speech_to_text(file: UploadFile = File(...)):
     try:
         audio_bytes = await file.read()
+        
+        # שימוש בשם קובץ ייחודי למניעת התנגשויות בשרת
+        unique_filename = f"/tmp/{uuid.uuid4()}.wav"
 
-        with open("temp.wav", "wb") as f:
+        with open(unique_filename, "wb") as f:
             f.write(audio_bytes)
 
-        with sr.AudioFile("temp.wav") as source:
+        with sr.AudioFile(unique_filename) as source:
             audio = recognizer.record(source)
 
         text = recognizer.recognize_google(audio, language="he-IL")
+        
+        # מחיקת הקובץ הזמני לאחר העיבוד (אופציונלי אך מומלץ)
+        if os.path.exists(unique_filename):
+            os.remove(unique_filename)
+            
         return {"text": text}
 
     except Exception as e:
