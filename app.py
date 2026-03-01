@@ -164,49 +164,56 @@ async def extract_audio_info(video_id: str):
 
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr(
+    request: Request, # נוסף כדי לתמוך בקבלת כל סוגי הפרמטרים
     ApiCallId: str = "",
     ApiPhone: str = "",
     DTMF: str = None,
     search_query: str = None,
     hangup: str = ""
 ):
-    # ניקוי לכלוך של ימות המשיח ובדיקה אם המקש הגיע בפרמטר אחר
-    if not DTMF or DTMF == "%val%": DTMF = None
+    # משיכת פרמטרים נוספים (ימות המשיח לעיתים שולחים את ההקשה בפרמטר data)
+    params = request.query_params
+    dtmf_input = DTMF or params.get("data")
+
+    # ניקוי לכלוך של ימות המשיח
+    if not dtmf_input or dtmf_input == "%val%": dtmf_input = None
     if not search_query or search_query == "%val%": search_query = None
 
     if hangup == "yes":
         logger.info(f"שיחה הסתיימה: {ApiPhone}")
         return ""
 
-    logger.info(f"בקשה נכנסה: טלפון={ApiPhone}, מקש={DTMF}, חיפוש={search_query}")
+    logger.info(f"בקשה נכנסה: טלפון={ApiPhone}, מקש={dtmf_input}, חיפוש={search_query}")
 
     # --- שלב 1: תפריט ראשי ---
-    if DTMF is None and search_query is None:
+    if dtmf_input is None and search_query is None:
         return (
             "read=t-שלום. "
             "לניווט ומוביט הקש 2. "
             "לחיפוש ביוטיוב הקש 3. "
             "לספוטיפיי הקש 4. "
-            "לבינה מלאכותית הקש 5.=DTMF,yes,1,1,1,Digits,no"
+            "לבינה מלאכותית הקש 5.=data,yes,1,1,1,Digits,no"
         )
 
-    # --- שלב 2: בקשת הקלטה (כאן הוספתי את העברת ה-DTMF הלאה) ---
-    if DTMF and search_query is None:
-        if DTMF == "2":
-            return f"read=t-נא אמרו יעד לנסיעה=search_query,no,he,1,5,7&DTMF={DTMF}"
-        elif DTMF == "3":
-            return f"read=t-נא אמרו שם שיר ליוטיוב=search_query,no,he,1,5,7&DTMF={DTMF}"
-        elif DTMF == "4":
-            return f"read=t-נא אמרו שם שיר לספוטיפיי=search_query,no,he,1,5,7&DTMF={DTMF}"
-        elif DTMF == "5":
-            return f"read=t-נא אמרו שאלה לבינה המלאכותית=search_query,no,he,1,5,7&DTMF={DTMF}"
+    # --- שלב 2: בקשת הקלטה מהמשתמש (העברת המקש הלאה ב-URL) ---
+    if dtmf_input and search_query is None:
+        prompts = {
+            "2": "נא אמרו יעד לנסיעה",
+            "3": "נא אמרו שם שיר ליוטיוב",
+            "4": "נא אמרו שם שיר לספוטיפיי",
+            "5": "נא אמרו שאלה לבינה המלאכותית"
+        }
+        
+        prompt_text = prompts.get(dtmf_input)
+        if prompt_text:
+            return f"read=t-{prompt_text}=search_query,no,he,1,5,7&DTMF={dtmf_input}"
         else:
             return "id_list_message=t-בחירה לא תקינה. להתראות."
 
-   # --- שלב 3: ביצוע הפעולה ---
+   # --- שלב 3: ביצוע הפעולה האמיתית ---
     if search_query:
-        # אופציה 3: יוטיוב
-        if DTMF == "3":
+        # אופציה 3: יוטיוב (וגם אופציה 4 כרגע משתמשת באותו מנוע חיפוש)
+        if dtmf_input in ["3", "4"]:
             results = await search_youtube(search_query)
             if results:
                 title = smart_trim(results[0]['title'], limit=100)
@@ -215,18 +222,16 @@ async def ivr(
                 
                 if info and "url" in info:
                     audio_url = info['url']
-                    # בימות המשיח אי אפשר לשרשר playfile ו-id_list_message באותה שורה בקלות
-                    # לכן נשלח פקודת השמעה ישירה של הקובץ
                     return f"playfile={audio_url}"
                 else:
                     return f"id_list_message=t-לא ניתן להפיק קישור להשמעה עבור {title}."
             
-            return "id_list_message=t-לא נמצאו תוצאות ביוטיוב."
+            return "id_list_message=t-לא נמצאו תוצאות."
 
         # אופציה 2: מוביט / גוגל מפות
-        elif DTMF == "2":
+        elif dtmf_input == "2":
             if not gmaps:
-                return "id_list_message=t-שירות המיקום אינו מוגדר."
+                return "id_list_message=t-שירות המיקום אינו מוגדר בשרת."
             loop = asyncio.get_event_loop()
             places = await loop.run_in_executor(None, lambda: gmaps.places(query=search_query))
             results = places.get("results", [])
@@ -237,7 +242,7 @@ async def ivr(
             return "id_list_message=t-לא מצאתי את המקום המבוקש."
 
         # אופציה 5: בינה מלאכותית
-        elif DTMF == "5":
+        elif dtmf_input == "5":
             ai_response = smart_trim(f"תשובת המערכת עבור {search_query}: השירות בבדיקה.")
             return f"id_list_message=t-{ai_response}"
 
