@@ -170,7 +170,7 @@ async def ivr(
     search_query: str = None,
     hangup: str = ""
 ):
-    # ניקוי לכלוך של ימות המשיח
+    # ניקוי לכלוך של ימות המשיח ובדיקה אם המקש הגיע בפרמטר אחר
     if not DTMF or DTMF == "%val%": DTMF = None
     if not search_query or search_query == "%val%": search_query = None
 
@@ -190,44 +190,43 @@ async def ivr(
             "לבינה מלאכותית הקש 5.=DTMF,yes,1,1,1,Digits,no"
         )
 
-    # --- שלב 2: בקשת הקלטה מהמשתמש לפי הבחירה שלו ---
+    # --- שלב 2: בקשת הקלטה (כאן הוספתי את העברת ה-DTMF הלאה) ---
     if DTMF and search_query is None:
         if DTMF == "2":
-            return "read=t-נא אמרו יעד לנסיעה=search_query,no,he,1,5,7"
+            return f"read=t-נא אמרו יעד לנסיעה=search_query,no,he,1,5,7&DTMF={DTMF}"
         elif DTMF == "3":
-            return "read=t-נא אמרו שם שיר ליוטיוב=search_query,no,he,1,5,7"
+            return f"read=t-נא אמרו שם שיר ליוטיוב=search_query,no,he,1,5,7&DTMF={DTMF}"
         elif DTMF == "4":
-            return "read=t-נא אמרו שם שיר לספוטיפיי=search_query,no,he,1,5,7"
+            return f"read=t-נא אמרו שם שיר לספוטיפיי=search_query,no,he,1,5,7&DTMF={DTMF}"
         elif DTMF == "5":
-            return "read=t-נא אמרו שאלה לבינה המלאכותית=search_query,no,he,1,5,7"
+            return f"read=t-נא אמרו שאלה לבינה המלאכותית=search_query,no,he,1,5,7&DTMF={DTMF}"
         else:
             return "id_list_message=t-בחירה לא תקינה. להתראות."
 
-   # --- שלב 3: ביצוע הפעולה האמיתית ---
+   # --- שלב 3: ביצוע הפעולה ---
     if search_query:
         # אופציה 3: יוטיוב
         if DTMF == "3":
             results = await search_youtube(search_query)
             if results:
-                # שימוש ב-smart_trim כדי לוודא שהשם לא ארוך מדי או שובר את הפקודה
                 title = smart_trim(results[0]['title'], limit=100)
                 video_id = results[0]['video_id']
-                
                 info = await extract_audio_info(video_id)
                 
-                # בדיקה שאין שגיאה במידע שחזר ושיש URL
                 if info and "url" in info:
                     audio_url = info['url']
-                    return f"id_list_message=t-מצאתי את {title}. השמעה נעימה.&playfile={audio_url}"
+                    # בימות המשיח אי אפשר לשרשר playfile ו-id_list_message באותה שורה בקלות
+                    # לכן נשלח פקודת השמעה ישירה של הקובץ
+                    return f"playfile={audio_url}"
                 else:
-                    return f"id_list_message=t-מצאתי את {title}, אך לא ניתן להפיק קישור להשמעה."
+                    return f"id_list_message=t-לא ניתן להפיק קישור להשמעה עבור {title}."
             
             return "id_list_message=t-לא נמצאו תוצאות ביוטיוב."
 
-        # אופציה 2: מוביט / גוגל מפות (חיפוש מקום)
+        # אופציה 2: מוביט / גוגל מפות
         elif DTMF == "2":
             if not gmaps:
-                return "id_list_message=t-שירות המיקום אינו מוגדר בשרת."
+                return "id_list_message=t-שירות המיקום אינו מוגדר."
             loop = asyncio.get_event_loop()
             places = await loop.run_in_executor(None, lambda: gmaps.places(query=search_query))
             results = places.get("results", [])
@@ -237,9 +236,8 @@ async def ivr(
                 return f"id_list_message=t-מצאתי את {name} בכתובת {address}."
             return "id_list_message=t-לא מצאתי את המקום המבוקש."
 
-        # אופציה 5: בינה מלאכותית (שימוש בפונקציית ה-Chat שלך)
+        # אופציה 5: בינה מלאכותית
         elif DTMF == "5":
-            # כאן המערכת משתמשת ב-smart_trim שכתבת
             ai_response = smart_trim(f"תשובת המערכת עבור {search_query}: השירות בבדיקה.")
             return f"id_list_message=t-{ai_response}"
 
