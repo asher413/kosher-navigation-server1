@@ -123,67 +123,57 @@ async def global_middleware(request: Request, call_next):
 
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr(
-    ApiCallId: str = "",
     ApiPhone: str = "",
-    ApiExtension: str = "",
-    path: str = "",
-    DTMF: str = "",
-    search_query: str = None,  # מקבל את הטקסט מהקלטת הקול
+    DTMF: str = None,
+    search_query: str = None,
     hangup: str = ""
 ):
-    logger.info(f"IVR call | phone={ApiPhone} | path={path} | dtmf={DTMF} | query={search_query}")
+    # ניקוי: אם ימות המשיח שולחים את המילה %val% כטקסט, נהפוך אותה ל-None
+    if DTMF == "%val%" or not DTMF:
+        DTMF = None
+    if search_query == "%val%" or not search_query:
+        search_query = None
+
+    logger.info(f"IVR Call | Phone: {ApiPhone} | DTMF: {DTMF} | Query: {search_query}")
 
     if hangup == "yes":
         return ""
 
-    # שלב 1: אם המשתמש עוד לא הקיש כלום ולא חיפש כלום - נשמיע תפריט
-    if not DTMF and not search_query:
+    # שלב א: תפריט ראשי (אם המשתמש עוד לא הקיש כלום)
+    if DTMF is None and search_query is None:
         return (
-            "read=t-ברוכים הבאים למערכת. "
-            "לניווט הקש 1. "
-            "למוביט הקש 2. "
+            "read=t-ברוכים הבאים למערכת הכשרה. "
             "ליוטיוב הקש 3. "
             "לספוטיפיי הקש 4. "
             "לבינה מלאכותית הקש 5.=DTMF,yes,1,1,1,Digits,no"
         )
 
-    # שלב 2: טיפול בבחירות התפריט (לפני חיפוש קולי)
-    if DTMF and not search_query:
-        if DTMF == "1":
-            return "id_list_message=t-מערכת ניווט הופעלה."
-        
-        elif DTMF == "2":
-            return "read=t-נא אמרו יעד למוביט=search_query,no,he,1,5,7"
-        
-        elif DTMF == "3":
+    # שלב ב: המשתמש הקיש מספר - עכשיו נבקש ממנו להגיד מה הוא מחפש
+    if DTMF and search_query is None:
+        if DTMF == "3":
             return "read=t-נא אמרו את שם השיר לחיפוש ביוטיוב=search_query,no,he,1,5,7"
-        
         elif DTMF == "4":
             return "read=t-נא אמרו את שם השיר לחיפוש בספוטיפיי=search_query,no,he,1,5,7"
-        
         elif DTMF == "5":
-            return "id_list_message=t-מערכת בינה מלאכותית הופעלה."
-        
+            return "read=t-נא אמרו שאלה לבינה המלאכותית=search_query,no,he,1,5,7"
         else:
             return "id_list_message=t-בחירה לא תקינה. להתראות."
 
-    # שלב 3: טיפול בתוצאות החיפוש הקולי (אחרי שהמשתמש דיבר)
+    # שלב ג: המשתמש אמר משהו - נבצע חיפוש
     if search_query:
-        if DTMF == "3":  # חיפוש ביוטיוב
+        if DTMF == "3": # יוטיוב
             results = await search_youtube(search_query)
             if results:
-                first_title = results[0]['title']
-                return f"id_list_message=t-מצאתי ביוטיוב את: {first_title}. מיד נשמיע."
+                return f"id_list_message=t-מצאתי ביוטיוב את {results[0]['title']}. מיד נשמיע."
             return "id_list_message=t-לא נמצאו תוצאות ביוטיוב."
-
-        elif DTMF == "4":  # חיפוש בספוטיפיי (כאן תבוא הלוגיקה של ספוטיפיי בעתיד)
+        
+        elif DTMF == "4": # ספוטיפיי
             return f"id_list_message=t-מחפש בספוטיפיי את {search_query}. השירות בבנייה."
+            
+        elif DTMF == "5": # AI
+            return f"id_list_message=t-השאלה שלך היא {search_query}. המעבד עסוק כרגע."
 
-        elif DTMF == "2":  # חיפוש במוביט/מיקום
-            return f"id_list_message=t-מחפש דרכי הגעה אל {search_query}."
-
-    return "id_list_message=t-תקלה במערכת."
-
+    return "id_list_message=t-סיום שיחה."
 # --------------------------------------------------
 # Standard Endpoints
 # --------------------------------------------------
