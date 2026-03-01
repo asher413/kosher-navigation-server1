@@ -1,256 +1,200 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import PlainTextResponse
-import requests
-import yt_dlp
-import uvicorn
-import random
-import googlemaps
-from datetime import datetime
 import os
+import asyncio
+import logging
+from typing import List, Dict, Optional
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from pydantic import BaseModel
+import httpx
+import yt_dlp
+import speech_recognition as sr
 
-# --- מפתחות מהסביבה ---
-GEMINI_API_KEY = "AIzaSyCG7bz2Ew0IpyQHzYX4ZqwSIXf9navfsNw"
-GOOGLE_MAPS_KEY = "AIzaSyCG7bz2Ew0IpyQHzYX4ZqwSIXf9navfsNw"
+# --------------------------------------------------
+# Logging
+# --------------------------------------------------
 
-gmaps = googlemaps.Client(key=GOOGLE_MAPS_KEY) if GOOGLE_MAPS_KEY else None
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("app")
 
-FORBIDDEN_WORDS = ["מילה1", "מילה2", "תוכן_לא_הולם"]
-BLOCKED_USERS = ["0501234567"]
+# --------------------------------------------------
+# Lifespan (Modern FastAPI)
+# --------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.async_client = httpx.AsyncClient(timeout=15.0)
+    logger.info("AsyncClient started")
+    yield
+    await app.state.async_client.aclose()
+    logger.info("AsyncClient closed")
 
-def is_safe(text):
-    if not text:
-        return True
-    return not any(word in text for word in FORBIDDEN_WORDS)
+app = FastAPI(title="Advanced Audio Search API", lifespan=lifespan)
 
+# --------------------------------------------------
+# Config (Environment Variables)
+# --------------------------------------------------
 
-def get_yt_audio(query, count=1):
-    if not is_safe(query):
-        return "blocked"
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "default_search": "ytsearch",
-        "ignoreerrors": True,
-        "retries": 5,
-        "fragment_retries": 5,
-        "extractor_retries": 5,
-        "socket_timeout": 15,
-        "force_ipv4": True,
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        }
+if not YOUTUBE_API_KEY:
+    logger.warning("YOUTUBE_API_KEY not set!")
+
+# --------------------------------------------------
+# Models
+# --------------------------------------------------
+
+class SearchResponse(BaseModel):
+    message: str
+    results: Optional[List[Dict]] = None
+
+class ChatRequest(BaseModel):
+    text: str
+
+# --------------------------------------------------
+# Utilities
+# --------------------------------------------------
+
+def smart_trim(text: str, limit: int = 400) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "... (הטקסט קוצר)"
+
+def is_safe(text: str) -> bool:
+    forbidden = ["xxx", "badword"]
+    lowered = text.lower()
+    return not any(word in lowered for word in forbidden)
+
+# --------------------------------------------------
+# YouTube Search
+# --------------------------------------------------
+
+async def search_youtube(query: str) -> List[Dict]:
+    params = {
+        "part": "snippet",
+        "q": query,
+        "key": YOUTUBE_API_KEY,
+        "maxResults": 20,
+        "type": "video"
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_query = f"ytsearch{count}:{query}"
-            info = ydl.extract_info(search_query, download=False)
-
-            if not info or "entries" not in info or not info["entries"]:
-                return None
-
-            valid_entries = [
-                e for e in info["entries"]
-                if e and is_safe(e.get("title", ""))
-            ]
-
-            if not valid_entries:
-                return None
-
-            if count == 1:
-                return valid_entries[0].get("url")
-
-            return [e.get("url") for e in valid_entries if e.get("url")]
-
-    except Exception as e:
-        print(f"YouTube Error: {e}")
-        return None
-
-
-def get_free_navigation(origin, destination):
-    try:
-        base_geo = "https://nominatim.openstreetmap.org/search"
-        headers = {"User-Agent": "MyIVRSystem/1.0"}
-
-        orig_geo = requests.get(
-            f"{base_geo}?q={origin}&format=json",
-            headers=headers,
-            timeout=10
-        ).json()
-
-        dest_geo = requests.get(
-            f"{base_geo}?q={destination}&format=json",
-            headers=headers,
-            timeout=10
-        ).json()
-
-        if not orig_geo or not dest_geo:
-            return "לא הצלחתי למצוא את הכתובת במערכת החינמית."
-
-        osrm_url = (
-            f"http://router.project-osrm.org/route/v1/driving/"
-            f"{orig_geo[0]['lon']},{orig_geo[0]['lat']};"
-            f"{dest_geo[0]['lon']},{dest_geo[0]['lat']}?overview=false&steps=true"
-        )
-
-        route_res = requests.get(osrm_url, timeout=10).json()
-
-        if "routes" not in route_res or not route_res["routes"]:
-            return "לא נמצאה דרך זמינה."
-
-        steps = route_res["routes"][0]["legs"][0]["steps"]
-        instructions = ["שימוש במערכת גיבוי חינמית."]
-
-        for step in steps[:3]:
-            instructions.append(
-                f"בעוד {int(step['distance'])} מטרים, "
-                f"{step['maneuver'].get('instruction', '')}"
-            )
-
-        return ". ".join(instructions)
-
-    except Exception:
-        return "מערכת הניווט אינה זמינה כרגע."
-
-
-def get_navigation(origin, destination, mode="driving"):
-    if not gmaps:
-        return get_free_navigation(origin, destination)
-
-    try:
-        now = datetime.now()
-
-        directions = gmaps.directions(
-            origin,
-            destination,
-            mode=mode,
-            departure_time=now,
-            language="he"
-        )
-
-        if not directions:
-            return get_free_navigation(origin, destination)
-
-        leg = directions[0]["legs"][0]
-        steps = leg["steps"]
-
-        instructions = [
-            f"מסלול מ{leg['start_address']} ל{leg['end_address']}."
-        ]
-
-        for step in steps[:4]:
-            clean_instr = (
-                step["html_instructions"]
-                .replace("<b>", "")
-                .replace("</b>", "")
-                .replace("</div>", "")
-            )
-
-            instructions.append(
-                f"בעוד {step['distance']['text']}, {clean_instr}"
-            )
-
-        return ". ".join(instructions)
-
-    except Exception:
-        return get_free_navigation(origin, destination)
-
-
-def ask_gemini(prompt):
-    if not is_safe(prompt) or not GEMINI_API_KEY:
-        return "התוכן חסום או שאין מפתח API."
-
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    )
-
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-
-    try:
-        response = requests.post(url, json=payload, timeout=15)
+        response = await app.state.async_client.get(YOUTUBE_SEARCH_URL, params=params)
+        response.raise_for_status()
         data = response.json()
 
-        if "candidates" not in data:
-            return "שגיאה בקבלת תשובה."
+        results = []
+        for item in data.get("items", []):
+            results.append({
+                "title": item["snippet"]["title"],
+                "video_id": item["id"]["videoId"]
+            })
 
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        return results
 
-    except Exception:
-        return "שגיאה בחיבור לבינה המלאכותית."
+    except Exception as e:
+        logger.error(f"YouTube search failed: {e}")
+        return []
 
-@app.get("/ivr", response_class=PlainTextResponse)
-async def ivr_logic(request: Request):
-    p = request.query_params
+# --------------------------------------------------
+# yt_dlp Extractor (Non-blocking)
+# --------------------------------------------------
 
-    # התיקון הקריטי: לוקח רק את המילה שלפני סימן השאלה אם קיים
-    raw_path = p.get("path", "")
-    path = raw_path.split('?')[0].strip()
+async def extract_audio_info(video_id: str):
+    loop = asyncio.get_event_loop()
+    url = f"https://www.youtube.com/watch?v={video_id}"
 
-    speech = p.get("search", "")
+    def run():
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "quiet": True,
+            "nocheckcertificate": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=False)
 
-    # --- צ'אט בינה מלאכותית ---
-    if path == "chat":
-        if not speech:
-            return "read=t-מה השאלה שלך?-search,no,speech,no,he-IL,no"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        try:
-            res = requests.post(url, json={"contents": [{"parts": [{"text": speech}]}]}, timeout=10).json()
-            text = res["candidates"][0]["content"]["parts"][0]["text"]
-            return f"id_list_message=t-{text[:400]}"
-        except:
-            return "id_list_message=t-שגיאה בחיבור לבינה"
+    try:
+        return await loop.run_in_executor(None, run)
+    except Exception as e:
+        logger.error(f"Extraction error: {e}")
+        return {"error": str(e)}
 
-    # --- יוטיוב ---
-    if path == "youtube":
-        if not speech:
-            return "read=t-נא לומר שם של שיר-search,no,speech,no,he-IL,no"
-        ydl_opts = {"format": "bestaudio/best", "noplaylist": True, "quiet": True, "default_search": "ytsearch1"}
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"ytsearch1:{speech}", download=False)
-                audio_url = info['entries'][0]['url']
-                return f"play_url={audio_url}&play_url_control=yes"
-        except:
-            return "id_list_message=t-לא נמצא שיר מתאים"
+# --------------------------------------------------
+# Endpoints
+# --------------------------------------------------
 
-    # --- ניווט ---
-    if path in ["waze", "moovit"]:
-        origin = p.get("origin_text", "")
-        if not origin:
-            return "read=t-נא לומר את נקודת המוצא-origin_text,no,speech,no,he-IL,no"
-        if not speech:
-            return "read=t-לאן תרצה להגיע?-search,no,speech,no,he-IL,no"
-        try:
-            mode = "driving" if path == "waze" else "transit"
-            directions = gmaps.directions(origin, speech, mode=mode, language="he")
-            if not directions:
-                return "id_list_message=t-לא נמצא מסלול זמין"
-            leg = directions[0]["legs"][0]
-            msg = f"מסלול מ{leg['start_address']} ל{leg['end_address']}. "
-            for step in leg["steps"][:3]:
-                instr = step["html_instructions"].replace("<b>","").replace("</b>","").replace("</div>","")
-                msg += f"בעוד {step['distance']['text']}, {instr}. "
-            return f"id_list_message=t-{msg[:400]}"
-        except:
-            return "id_list_message=t-שגיאה בשירות הניווט"
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
-    # הודעת דיבוב למקרה שזה עדיין לא מזהה
-    return f"id_list_message=t-המערכת זיהתה נתיב בשם {path}"
-    
-    # אם הגענו לכאן, סימן שאף if לא עבד (ה-path לא עבר נכון)
-        current_path = path if path else "ריק"
-        return f"id_list_message=t-שגיאה. השלוחה הוגדרה כ-{current_path}. נא לבדוק את הגדרות ה-API"
+@app.get("/search", response_model=SearchResponse)
+async def search(query: str):
+    if not is_safe(query):
+        raise HTTPException(status_code=400, detail="תוכן לא תקין")
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    results = await search_youtube(query)
+
+    if not results:
+        return SearchResponse(message="לא נמצאו תוצאות")
+
+    first = results[0]
+    others = results[1:]
+
+    message = f"נמצא: {first['title']}."
+    if others:
+        message += " להשמעת שאר התוצאות הקש 2."
+
+    return SearchResponse(
+        message=message,
+        results=results
+    )
+
+@app.get("/search/more")
+async def search_more(query: str):
+    results = await search_youtube(query)
+    return {"results": results[1:]}
+
+@app.get("/play")
+async def play(video_id: str):
+    info = await extract_audio_info(video_id)
+
+    if "error" in info:
+        raise HTTPException(status_code=500, detail=info["error"])
+
+    return {
+        "title": info.get("title"),
+        "audio_url": info.get("url")
+    }
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    if not is_safe(request.text):
+        raise HTTPException(status_code=400, detail="תוכן לא תקין")
+
+    response_text = f"תגובה עבור: {request.text}"
+    return {"response": smart_trim(response_text)}
+
+# --------------------------------------------------
+# Speech To Text (Cloud Compatible)
+# --------------------------------------------------
+
+recognizer = sr.Recognizer()
+
+@app.post("/speech-to-text")
+async def speech_to_text(file: UploadFile = File(...)):
+    try:
+        audio_bytes = await file.read()
+
+        with open("temp.wav", "wb") as f:
+            f.write(audio_bytes)
+
+        with sr.AudioFile("temp.wav") as source:
+            audio = recognizer.record(source)
+
+        text = recognizer.recognize_google(audio, language="he-IL")
+        return {"text": text}
+
+    except Exception as e:
+        logger.error(f"Speech error: {e}")
+        return {"error": str(e)}
