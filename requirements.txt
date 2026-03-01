@@ -1,9 +1,11 @@
 fastapi
 uvicorn
-requests
 pydantic
 yt-dlp>=2025.1.15
 python-multipart
+requests
+httpx
+SpeechRecognition
 googlemaps
 gTTS
 geopy
