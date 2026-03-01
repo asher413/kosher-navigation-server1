@@ -251,3 +251,4 @@ async def speech_to_text(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Speech error: {e}")
         return {"error": str(e)}
+        
