@@ -2,11 +2,12 @@ import os
 import asyncio
 import logging
 import uuid
+import time
 from typing import List, Dict, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 import httpx
 import yt_dlp
@@ -22,12 +23,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
 # --------------------------------------------------
-# Lifespan (Modern FastAPI)
+# Lifespan
 # --------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.async_client = httpx.AsyncClient(timeout=15.0)
+    app.state.cache = {}
+    app.state.rate_limit = {}
     logger.info("AsyncClient started")
     yield
     await app.state.async_client.aclose()
@@ -36,7 +39,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Advanced Audio Search API", lifespan=lifespan)
 
 # --------------------------------------------------
-# Config (Environment Variables)
+# Config
 # --------------------------------------------------
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
@@ -44,13 +47,7 @@ MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
 
 YOUTUBE_SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 
-# אתחול לקוח Google Maps
 gmaps = googlemaps.Client(key=MAPS_API_KEY) if MAPS_API_KEY else None
-
-if not YOUTUBE_API_KEY:
-    logger.warning("YOUTUBE_API_KEY not set!")
-if not MAPS_API_KEY:
-    logger.warning("GOOGLE_MAPS_API_KEY not set!")
 
 # --------------------------------------------------
 # Models
@@ -68,48 +65,97 @@ class ChatRequest(BaseModel):
 # --------------------------------------------------
 
 def smart_trim(text: str, limit: int = 400) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "... (הטקסט קוצר)"
+    return text if len(text) <= limit else text[:limit] + "... (הטקסט קוצר)"
 
 def is_safe(text: str) -> bool:
-    # כאן ניתן להוסיף מילים נוספות לסינון במידת הצורך
     forbidden = ["xxx", "badword"]
     lowered = text.lower()
     return not any(word in lowered for word in forbidden)
 
+def rate_limit(ip: str, limit: int = 30, window: int = 60):
+    now = time.time()
+    records = app.state.rate_limit.setdefault(ip, [])
+    records[:] = [t for t in records if now - t < window]
+    if len(records) >= limit:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    records.append(now)
+
+def get_cache(key):
+    item = app.state.cache.get(key)
+    if not item:
+        return None
+    data, timestamp = item
+    if time.time() - timestamp > 60:
+        del app.state.cache[key]
+        return None
+    return data
+
+def set_cache(key, value):
+    app.state.cache[key] = (value, time.time())
+
+async def retry_request(func, retries=3):
+    for attempt in range(retries):
+        try:
+            return await func()
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            await asyncio.sleep(2 ** attempt)
+
 # --------------------------------------------------
-# YouTube Search Logic
+# Middleware (Debug + Rate Limit)
+# --------------------------------------------------
+
+@app.middleware("http")
+async def global_middleware(request: Request, call_next):
+    logger.info(f"Incoming request: {request.url}")
+    rate_limit(request.client.host if request.client else "unknown")
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        logger.error(f"Unhandled error: {e}")
+        return JSONResponse(status_code=500, content={"error": "Server error"})
+
+# --------------------------------------------------
+# YouTube Search
 # --------------------------------------------------
 
 async def search_youtube(query: str) -> List[Dict]:
-    params = {
-        "part": "snippet",
-        "q": query,
-        "key": YOUTUBE_API_KEY,
-        "maxResults": 20,
-        "type": "video"
-    }
-
-    try:
-        response = await app.state.async_client.get(YOUTUBE_SEARCH_URL, params=params)
-        response.raise_for_status()
-        data = response.json()
-
-        results = []
-        for item in data.get("items", []):
-            results.append({
-                "title": item["snippet"]["title"],
-                "video_id": item["id"]["videoId"]
-            })
-        return results
-
-    except Exception as e:
-        logger.error(f"YouTube search failed: {e}")
+    if not YOUTUBE_API_KEY:
+        logger.warning("YouTube API key missing")
         return []
 
+    cache_key = f"yt:{query}"
+    cached = get_cache(cache_key)
+    if cached:
+        return cached
+
+    async def call():
+        params = {
+            "part": "snippet",
+            "q": query,
+            "key": YOUTUBE_API_KEY,
+            "maxResults": 20,
+            "type": "video"
+        }
+        r = await app.state.async_client.get(YOUTUBE_SEARCH_URL, params=params)
+        r.raise_for_status()
+        data = r.json()
+        return [
+            {
+                "title": item["snippet"]["title"],
+                "video_id": item["id"]["videoId"]
+            }
+            for item in data.get("items", [])
+        ]
+
+    results = await retry_request(call)
+    set_cache(cache_key, results)
+    return results
+
 # --------------------------------------------------
-# yt_dlp Extractor (Non-blocking)
+# yt_dlp Extractor
 # --------------------------------------------------
 
 async def extract_audio_info(video_id: str):
@@ -117,12 +163,7 @@ async def extract_audio_info(video_id: str):
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     def run():
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "quiet": True,
-            "nocheckcertificate": True,
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL({"quiet": True}) as ydl:
             return ydl.extract_info(url, download=False)
 
     try:
@@ -130,6 +171,24 @@ async def extract_audio_info(video_id: str):
     except Exception as e:
         logger.error(f"Extraction error: {e}")
         return {"error": str(e)}
+
+# --------------------------------------------------
+# IVR Endpoint (Fix 404)
+# --------------------------------------------------
+
+@app.get("/ivr", response_class=PlainTextResponse)
+async def ivr_handler(request: Request):
+    params = request.query_params
+    logger.info(f"IVR params: {dict(params)}")
+
+    path = params.get("path", "")
+
+    if path == "waze":
+        return "ניווט מופעל"
+    elif path == "search":
+        return "חיפוש מופעל"
+    else:
+        return "תפריט ראשי"
 
 # --------------------------------------------------
 # Endpoints
@@ -149,91 +208,68 @@ async def search(query: str):
     if not results:
         return SearchResponse(message="לא נמצאו תוצאות")
 
-    first = results[0]
-    others = results[1:]
-
-    message = f"נמצא: {first['title']}."
-    if others:
+    message = f"נמצא: {results[0]['title']}."
+    if len(results) > 1:
         message += " להשמעת שאר התוצאות הקש 2."
 
-    return SearchResponse(
-        message=message,
-        results=results
-    )
+    return SearchResponse(message=message, results=results)
 
 @app.get("/search/more")
 async def search_more(query: str):
-    results = await search_youtube(query)
-    return {"results": results[1:]}
+    return {"results": (await search_youtube(query))[1:]}
 
 @app.get("/play")
 async def play(video_id: str):
     info = await extract_audio_info(video_id)
-
     if "error" in info:
         raise HTTPException(status_code=500, detail=info["error"])
-
-    return {
-        "title": info.get("title"),
-        "audio_url": info.get("url")
-    }
+    return {"title": info.get("title"), "audio_url": info.get("url")}
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
     if not is_safe(request.text):
         raise HTTPException(status_code=400, detail="תוכן לא תקין")
-
-    response_text = f"תגובה עבור: {request.text}"
-    return {"response": smart_trim(response_text)}
+    return {"response": smart_trim(f"תגובה עבור: {request.text}")}
 
 # --------------------------------------------------
-# New: Text To Speech (gTTS)
+# TTS
 # --------------------------------------------------
 
 @app.get("/tts")
 async def text_to_speech(text: str, lang: str = "he"):
+    filename = f"/tmp/{uuid.uuid4()}.mp3"
     try:
         tts = gTTS(text=text, lang=lang)
-        # שימוש בנתיב זמני ייחודי
-        filename = f"/tmp/{uuid.uuid4()}.mp3"
         tts.save(filename)
         return FileResponse(filename, media_type="audio/mpeg")
-    except Exception as e:
-        logger.error(f"TTS error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(filename):
+            os.remove(filename)
 
 # --------------------------------------------------
-# New: Location Search (Google Maps)
+# Maps
 # --------------------------------------------------
 
 @app.get("/location/search")
 async def find_place(query: str):
     if not gmaps:
         raise HTTPException(status_code=500, detail="Google Maps API key not set")
-    
-    try:
-        loop = asyncio.get_event_loop()
-        # הרצה ב-executor כי הספרייה סינכרונית
-        places = await loop.run_in_executor(None, lambda: gmaps.places(query=query))
-        return {"results": places.get("results", [])}
-    except Exception as e:
-        logger.error(f"Maps error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+    loop = asyncio.get_event_loop()
+    places = await loop.run_in_executor(None, lambda: gmaps.places(query=query))
+    return {"results": places.get("results", [])}
 
 # --------------------------------------------------
-# Speech To Text (Cloud Compatible)
+# Speech To Text
 # --------------------------------------------------
 
 recognizer = sr.Recognizer()
 
 @app.post("/speech-to-text")
 async def speech_to_text(file: UploadFile = File(...)):
+    unique_filename = f"/tmp/{uuid.uuid4()}.wav"
     try:
         audio_bytes = await file.read()
-        
-        # שימוש בשם קובץ ייחודי למניעת התנגשויות בשרת
-        unique_filename = f"/tmp/{uuid.uuid4()}.wav"
-
         with open(unique_filename, "wb") as f:
             f.write(audio_bytes)
 
@@ -241,14 +277,7 @@ async def speech_to_text(file: UploadFile = File(...)):
             audio = recognizer.record(source)
 
         text = recognizer.recognize_google(audio, language="he-IL")
-        
-        # מחיקת הקובץ הזמני לאחר העיבוד (אופציונלי אך מומלץ)
+        return {"text": text}
+    finally:
         if os.path.exists(unique_filename):
             os.remove(unique_filename)
-            
-        return {"text": text}
-
-    except Exception as e:
-        logger.error(f"Speech error: {e}")
-        return {"error": str(e)}
-        
