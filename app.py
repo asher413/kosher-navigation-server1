@@ -153,7 +153,23 @@ async def search_youtube(query: str):
     return None
 
 async def extract_audio_info(video_id: str):
-    ydl_opts = {'format': 'bestaudio/best', 'quiet': True}
+    # הגדרות שעוקפות את החסימה של גוגל/יוטיוב על שרתי ענן
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'no_warnings': True,
+        # שימוש בלקוח אנדרואיד - זה ה-Bypass המרכזי
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android'],
+                'skip': ['webpage', 'hls']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'com.google.android.youtube/19.29.37 (Linux; U; Android 11) gzip',
+        }
+    }
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
             loop = asyncio.get_event_loop()
@@ -163,7 +179,6 @@ async def extract_audio_info(video_id: str):
         except Exception as e:
             logger.error(f"Audio extraction error: {e}")
             return {"error": str(e)}
-
 # --------------------------------------------------
 # IVR MENU (UPDATED WITH KEYPAD NAVIGATION)
 # --------------------------------------------------
@@ -194,16 +209,17 @@ async def ivr(
 
     logger.info(f"בקשה נכנסה: טלפון={ApiPhone}, מקש={dtmf_input}, חיפוש={search_query}")
 
-    # --- שלב 1: תפריט ראשי ---
+    # --- שלב 1: תפריט ראשי (תגובה נקייה) ---
     if dtmf_input is None and search_query is None:
-        return (
+        content = (
             "read=t-שלום. "
             "לניווט ומוביט הקש 2. "
             "לחיפוש ביוטיוב הקש 3. "
             "לספוטיפיי הקש 4. "
             "לבינה מלאכותית הקש 5.=data,yes,1,1,1,Digits,no"
         )
-
+        return PlainTextResponse(content=content, media_type="text/plain")
+        
     # --- שלב 2: בקשת הקלטה מהמשתמש (העברת המקש הלאה ב-URL) ---
     if dtmf_input and search_query is None:
         prompts = {
@@ -215,9 +231,10 @@ async def ivr(
         
         prompt_text = prompts.get(dtmf_input)
         if prompt_text:
-            return f"read=t-{prompt_text}=search_query,no,he,1,5,7&ApiExtension={dtmf_input}"
-        else:
-            return "id_list_message=t-בחירה לא תקינה. להתראות."
+            # שינוי כאן: הוספנו Voice (לדיבור) ו-yes (לסיום בסולמית)
+            return PlainTextResponse(
+                content=f"read=t-{prompt_text}=search_query,no,he,1,5,7,Voice,yes&data={dtmf_input}",
+                media_type="text/plain"
 
    # --- שלב 3: ביצוע הפעולה האמיתית ---
     if search_query:
