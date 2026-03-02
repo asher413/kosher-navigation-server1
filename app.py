@@ -168,22 +168,21 @@ async def extract_audio_info(video_id: str):
 # IVR MENU (UPDATED WITH KEYPAD NAVIGATION)
 # --------------------------------------------------
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Server is running"}
-    
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr(
-    request: Request, # נוסף כדי לתמוך בקבלת כל סוגי הפרמטרים
+    request: Request,
     ApiCallId: str = "",
     ApiPhone: str = "",
+    ApiExtension: str = "",   # ← להוסיף
     DTMF: str = None,
     search_query: str = None,
     hangup: str = ""
 ):
+    logger.info(f"כל הפרמטרים: {dict(request.query_params)}")
+    
     # משיכת פרמטרים נוספים (ימות המשיח לעיתים שולחים את ההקשה בפרמטר data)
     params = request.query_params
-    dtmf_input = DTMF or params.get("data")
+    dtmf_input = ApiExtension or DTMF or params.get("data")
 
     # ניקוי לכלוך של ימות המשיח
     if not dtmf_input or dtmf_input == "%val%": dtmf_input = None
@@ -216,7 +215,7 @@ async def ivr(
         
         prompt_text = prompts.get(dtmf_input)
         if prompt_text:
-            return f"read=t-{prompt_text}=search_query,no,he,1,5,7&data={dtmf_input}"
+            return f"read=t-{prompt_text}=search_query,no,he,1,5,7&ApiExtension={dtmf_input}"
         else:
             return "id_list_message=t-בחירה לא תקינה. להתראות."
 
