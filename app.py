@@ -28,7 +28,7 @@ logger = logging.getLogger("app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.async_client = httpx.AsyncClient(timeout=15.0)
+    app.state.async_client = httpx.AsyncClient(timeout=30.0)
     app.state.cache = {}
     app.state.rate_limit = {}
     logger.info("AsyncClient started")
@@ -157,7 +157,11 @@ async def extract_audio_info(video_id: str):
         except Exception as e:
             logger.error(f"Audio extraction error: {e}")
             return {"error": str(e)}
-            
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Server is running"}
+    
 # --------------------------------------------------
 # IVR MENU (UPDATED WITH KEYPAD NAVIGATION)
 # --------------------------------------------------
