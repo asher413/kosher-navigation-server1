@@ -213,7 +213,7 @@ async def ivr(
         
         prompt_text = prompts.get(dtmf_input)
         if prompt_text:
-            return f"read=t-{prompt_text}=search_query,no,he,1,5,7&DTMF={dtmf_input}"
+            return f"read=t-{prompt_text}=search_query,no,he,1,5,7&data={dtmf_input}"
         else:
             return "id_list_message=t-בחירה לא תקינה. להתראות."
 
@@ -229,7 +229,7 @@ async def ivr(
                 
                 if info and "url" in info:
                     audio_url = info['url']
-                    return f"playfile={audio_url}"
+                    return f"playfile={audio_url}&go_to_folder=."
                 else:
                     return f"id_list_message=t-לא ניתן להפיק קישור להשמעה עבור {title}."
             
