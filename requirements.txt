@@ -10,3 +10,4 @@ googlemaps
 gTTS
 geopy
 spotipy
+gunicorn
