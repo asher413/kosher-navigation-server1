@@ -234,7 +234,7 @@ async def ivr(
             # שינוי כאן: הוספנו Voice (לדיבור) ו-yes (לסיום בסולמית)
             return PlainTextResponse(
                 content=f"read=t-{prompt_text}=search_query,no,he,1,5,7,Voice,yes&data={dtmf_input}",
-                media_type="text/plain"(
+                media_type="text/plain")
 
    # --- שלב 3: ביצוע הפעולה האמיתית ---
     if search_query:
