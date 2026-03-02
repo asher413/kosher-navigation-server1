@@ -15,6 +15,9 @@ import speech_recognition as sr
 import googlemaps
 from gtts import gTTS
 
+def smart_trim(text, limit=100):
+    if not text: return ""
+    return text[:limit] + "..." if len(text) > limit else text
 # --------------------------------------------------
 # Logging
 # --------------------------------------------------
