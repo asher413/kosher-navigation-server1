@@ -161,14 +161,14 @@ async def extract_audio_info(video_id: str):
             logger.error(f"Audio extraction error: {e}")
             return {"error": str(e)}
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Server is running"}
-    
 # --------------------------------------------------
 # IVR MENU (UPDATED WITH KEYPAD NAVIGATION)
 # --------------------------------------------------
 
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "Server is running"}
+    
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr(
     request: Request, # נוסף כדי לתמוך בקבלת כל סוגי הפרמטרים
