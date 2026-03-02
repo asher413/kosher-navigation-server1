@@ -1,13 +1,13 @@
 fastapi
 uvicorn
-pydantic
+gunicorn
+httpx
 yt-dlp
+pydantic
 python-multipart
 requests
-httpx
 SpeechRecognition
 googlemaps
 gTTS
 geopy
 spotipy
-gunicorn
