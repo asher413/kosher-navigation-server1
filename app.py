@@ -211,13 +211,37 @@ async def ivr(
     if dtmf_input is None and search_query is None:
         content = (
             "read=t-שלום. "
-            "לניווט ומוביט הקש 2. "
+            "לניווט הקש 1. "
+            "למוביט הקש 2. "
             "לחיפוש ביוטיוב הקש 3. "
             "לספוטיפיי הקש 4. "
             "לבינה מלאכותית הקש 5.=data,yes,1,1,1,Digits,no"
         )
         return PlainTextResponse(content=content, media_type="text/plain")
         
+    # --- תת תפריט יוטיוב ---
+    if dtmf_input == "3" and search_query is None:
+        return PlainTextResponse(
+            "read=t-להשמעת שירים חדשים הקש 1. "
+            "לחיפוש קולי הקש 2.=mode,yes,1,1,1,Digits,no"
+        )
+
+    # --- יוטיוב: שירים חדשים ---
+    if params.get("mode") == "3" and dtmf_input == "1":
+        results = await search_youtube("שירים חדשים 2025")
+        if results:
+            info = await extract_audio_info(results[0]['video_id'])
+            if info and "url" in info:
+                return PlainTextResponse(f"playfile={info['url']}")
+        return PlainTextResponse("id_list_message=t-לא נמצאו שירים חדשים.")
+
+    # --- יוטיוב: חיפוש קולי ---
+    if params.get("mode") == "3" and dtmf_input == "2" and search_query is None:
+        return PlainTextResponse(
+            "read=t-נא אמרו את שם השיר לאחר הצליל."
+            "record=/speech-to-text?mode=ytvoice,5,0,beep"
+        )
+    
     # --- שלב 2: בקשת הקלטה מהמשתמש (העברת המקש הלאה ב-URL) ---
     if dtmf_input and search_query is None:
         prompts = {
@@ -231,26 +255,22 @@ async def ivr(
         if prompt_text:
             # שינוי כאן: הוספנו Voice (לדיבור) ו-yes (לסיום בסולמית)
             return PlainTextResponse(
-                content=f"read=t-{prompt_text}=search_query,no,he,1,1,7,Voice,yes&mode={dtmf_input}",
-                media_type="text/plain")
-
+                content=(
+                    f"read=t-{prompt_text}."
+                    f"record=/speech-to-text?mode={dtmf_input},5,0,beep"
+                ),
+                media_type="text/plain"
+            )
    # --- שלב 3: ביצוע הפעולה האמיתית ---
     if search_query:
-        # אופציה 3: יוטיוב (וגם אופציה 4 כרגע משתמשת באותו מנוע חיפוש)
-        if dtmf_input in ["3", "4"]:
-            results = await search_youtube(search_query)
-            if results:
-                title = smart_trim(results[0]['title'], limit=100)
-                video_id = results[0]['video_id']
-                info = await extract_audio_info(video_id)
-                
-                if info and "url" in info:
-                    audio_url = info['url']
-                    return PlainTextResponse(f"playfile={audio_url}&go_to_folder=.")
-                else:
-                    return PlainTextResponse(f"id_list_message=t-לא ניתן להפיק קישור להשמעה עבור {title}.")
-            
-            return PlainTextResponse("id_list_message=t-לא נמצאו תוצאות ביוטיוב.")
+   # --- תוצאה מחיפוש קולי יוטיוב ---
+    if params.get("mode") == "ytvoice":
+        results = await search_youtube(search_query)
+        if results:
+            info = await extract_audio_info(results[0]['video_id'])
+            if info and "url" in info:
+                return PlainTextResponse(f"playfile={info['url']}")
+        return PlainTextResponse("id_list_message=t-לא נמצאה תוצאה.")
 
         # אופציה 2: מוביט / גוגל מפות
         elif dtmf_input == "2":
@@ -350,7 +370,7 @@ async def find_place(query: str):
 recognizer = sr.Recognizer()
 
 @app.post("/speech-to-text")
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(request: Request, file: UploadFile = File(...)):
     unique_filename = f"/tmp/{uuid.uuid4()}.wav"
     try:
         audio_bytes = await file.read()
@@ -361,7 +381,11 @@ async def speech_to_text(file: UploadFile = File(...)):
             audio = recognizer.record(source)
 
         text = recognizer.recognize_google(audio, language="he-IL")
-        return {"text": text}
+        mode = request.query_params.get("mode")
+        return PlainTextResponse(
+            f"go_to=/ivr?mode={mode}&search_query={text}"
+        )
+        
     finally:
         if os.path.exists(unique_filename):
             os.remove(unique_filename)
