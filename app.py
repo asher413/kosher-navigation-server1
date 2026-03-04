@@ -161,7 +161,7 @@ async def extract_audio_info(video_id: str):
         # שימוש בלקוח אנדרואיד - זה ה-Bypass המרכזי
         'extractor_args': {
             'youtube': {
-                'player_client': ['android'],
+                'player_client': ['ios', 'android', 'mweb'],
                 'skip': ['webpage', 'hls']
             }
         },
@@ -193,11 +193,9 @@ async def ivr(
     search_query: str = None,
     hangup: str = ""
 ):
-    logger.info(f"כל הפרמטרים: {dict(request.query_params)}")
-    
-    # משיכת פרמטרים נוספים (ימות המשיח לעיתים שולחים את ההקשה בפרמטר data)
     params = request.query_params
-    dtmf_input = ApiExtension or DTMF or params.get("data")
+    # התיקון: הוספת params.get("mode") כדי לקבל את הבחירה מהשלב הקודם
+    dtmf_input = params.get("mode") or ApiExtension or DTMF or params.get("data")
 
     # ניקוי לכלוך של ימות המשיח
     if not dtmf_input or dtmf_input == "%val%": dtmf_input = None
@@ -233,7 +231,7 @@ async def ivr(
         if prompt_text:
             # שינוי כאן: הוספנו Voice (לדיבור) ו-yes (לסיום בסולמית)
             return PlainTextResponse(
-                content=f"read=t-{prompt_text}=search_query,no,he,1,5,7,Voice,yes&data={dtmf_input}",
+                content=f"read=t-{prompt_text}=search_query,no,he,1,1,7,Voice,yes&mode={dtmf_input}",
                 media_type="text/plain")
 
    # --- שלב 3: ביצוע הפעולה האמיתית ---
@@ -248,31 +246,31 @@ async def ivr(
                 
                 if info and "url" in info:
                     audio_url = info['url']
-                    return f"playfile={audio_url}&go_to_folder=."
+                    return PlainTextResponse(f"playfile={audio_url}&go_to_folder=.")
                 else:
-                    return f"id_list_message=t-לא ניתן להפיק קישור להשמעה עבור {title}."
+                    return PlainTextResponse(f"id_list_message=t-לא ניתן להפיק קישור להשמעה עבור {title}.")
             
-            return "id_list_message=t-לא נמצאו תוצאות."
+            return PlainTextResponse("id_list_message=t-לא נמצאו תוצאות ביוטיוב.")
 
         # אופציה 2: מוביט / גוגל מפות
         elif dtmf_input == "2":
             if not gmaps:
-                return "id_list_message=t-שירות המיקום אינו מוגדר בשרת."
+                return PlainTextResponse("id_list_message=t-שירות המיקום אינו מוגדר.")
             loop = asyncio.get_event_loop()
             places = await loop.run_in_executor(None, lambda: gmaps.places(query=search_query))
             results = places.get("results", [])
             if results:
                 name = results[0].get('name')
                 address = results[0].get('formatted_address')
-                return f"id_list_message=t-מצאתי את {name} בכתובת {address}."
-            return "id_list_message=t-לא מצאתי את המקום המבוקש."
+                return PlainTextResponse(f"id_list_message=t-מצאתי את {name} בכתובת {address}.")
+            return PlainTextResponse("id_list_message=t-לא מצאתי את המקום המבוקש.")
 
         # אופציה 5: בינה מלאכותית
         elif dtmf_input == "5":
             ai_response = smart_trim(f"תשובת המערכת עבור {search_query}: השירות בבדיקה.")
-            return f"id_list_message=t-{ai_response}"
-
-    return "id_list_message=t-חזרה לתפריט הראשי."
+            return PlainTextResponse(f"id_list_message=t-{ai_response}")
+            
+    return PlainTextResponse("id_list_message=t-חזרה לתפריט הראשי.")
 # --------------------------------------------------
 # Standard Endpoints
 # --------------------------------------------------
