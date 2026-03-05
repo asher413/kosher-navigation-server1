@@ -250,7 +250,6 @@ async def extract_audio_info(video_id: str):
 # --------------------------------------------------
 # IVR MENU
 # --------------------------------------------------
-
 @app.get("/ivr", response_class=PlainTextResponse)
 async def ivr(
     request: Request,
@@ -261,10 +260,9 @@ async def ivr(
     search_query: str = None,
     hangup: str = ""
 ):
-
     params = request.query_params
-
-    dtmf_input = params.get("mode") or ApiExtension or DTMF or params.get("data")
+    mode = params.get("mode")
+    dtmf_input = mode or ApiExtension or DTMF or params.get("data")
 
     if not dtmf_input or dtmf_input == "%val%":
         dtmf_input = None
@@ -276,16 +274,12 @@ async def ivr(
         logger.info(f"שיחה הסתיימה {ApiPhone}")
         return ""
 
-    logger.info(
-        f"טלפון={ApiPhone} מקש={dtmf_input} חיפוש={search_query}"
-    )
+    logger.info(f"טלפון={ApiPhone} מקש={dtmf_input} חיפוש={search_query}")
 
     # --------------------------------------------------
     # תפריט ראשי
     # --------------------------------------------------
-
     if dtmf_input is None and search_query is None:
-
         content = (
             "read=t-שלום "
             "לניווט הקש 1 "
@@ -295,140 +289,104 @@ async def ivr(
             "לבינה מלאכותית הקש 5"
             "=data,yes,1,1,1,Digits,no"
         )
-
         return PlainTextResponse(content)
+
+    logger.info(f"Mode={mode}, DTMF={dtmf_input}")
 
     # --------------------------------------------------
     # תת תפריט יוטיוב
     # --------------------------------------------------
-
     if dtmf_input == "3" and search_query is None:
-
         return PlainTextResponse(
             "read=t-להשמעת שירים חדשים הקש 1 "
             "לחיפוש קולי הקש 2"
             "=mode,yes,1,1,1,Digits,no"
         )
 
+    logger.info(f"Mode={mode}, DTMF={dtmf_input}")
+
     # --------------------------------------------------
     # שירים חדשים
     # --------------------------------------------------
-
-    if params.get("mode") == "3" and dtmf_input == "1":
-
+    results = []  # משתנה results מוכן לשימוש
+    if mode == "3" and dtmf_input == "1":
+        results = await search_youtube("שירים חדשים 2025")
         if not results or not results[0]:
             logger.warning("No YouTube results found for 'שירים חדשים 2025'")
             return PlainTextResponse("id_list_message=t-לא נמצאו שירים חדשים.")
 
-        if results:
+        info = await extract_audio_info(results[0]['video_id'])
+        if info and "url" in info:
+            return PlainTextResponse(f"playfile={info['url']}")
 
-            info = await extract_audio_info(results[0]['video_id'])
+        return PlainTextResponse("id_list_message=t-לא נמצאו שירים חדשים")
 
-            if info and "url" in info:
-                return PlainTextResponse(f"playfile={info['url']}")
+    logger.info(f"Mode={mode}, DTMF={dtmf_input}")
 
-        return PlainTextResponse(
-            "id_list_message=t-לא נמצאו שירים חדשים"
-        )
     # --------------------------------------------------
     # חיפוש קולי יוטיוב
     # --------------------------------------------------
-
-    if params.get("mode") == "3" and dtmf_input == "2":
-
+    if mode == "3" and dtmf_input == "2":
         return PlainTextResponse(
             "read=t-נא אמרו את שם השיר לאחר הצליל "
             "record=/speech-to-text?mode=ytvoice,5,0,beep"
         )
 
+    logger.info(f"Mode={mode}, DTMF={dtmf_input}")
+
     # --------------------------------------------------
     # בקשת הקלטה
     # --------------------------------------------------
-
     if dtmf_input and search_query is None:
-
         prompts = {
             "2": "נא אמרו יעד לנסיעה",
             "3": "נא אמרו שם שיר ליוטיוב",
             "4": "נא אמרו שם שיר לספוטיפיי",
             "5": "נא אמרו שאלה לבינה המלאכותית"
         }
-
         prompt_text = prompts.get(dtmf_input)
-
         if prompt_text:
-
             return PlainTextResponse(
                 f"read=t-{prompt_text}."
                 f"record=/speech-to-text?mode={dtmf_input},5,0,beep"
             )
 
+    logger.info(f"Mode={mode}, DTMF={dtmf_input}")
+
     # --------------------------------------------------
     # תוצאה מחיפוש קולי
     # --------------------------------------------------
-
     if search_query:
-
-        if params.get("mode") == "ytvoice":
-
+        if mode == "ytvoice":
             results = await search_youtube(search_query)
-
             if results:
-
                 info = await extract_audio_info(results[0]['video_id'])
-
                 if info and "url" in info:
-                    return PlainTextResponse(
-                        f"playfile={info['url']}"
-                    )
-
-            return PlainTextResponse(
-                "id_list_message=t-לא נמצאה תוצאה"
-            )
+                    return PlainTextResponse(f"playfile={info['url']}")
+            return PlainTextResponse("id_list_message=t-לא נמצאה תוצאה")
 
         elif dtmf_input == "2":
-
             if not gmaps:
-                return PlainTextResponse(
-                    "id_list_message=t-שירות המיקום לא מוגדר"
-                )
+                return PlainTextResponse("id_list_message=t-שירות המיקום לא מוגדר")
 
             loop = asyncio.get_event_loop()
-
             places = await loop.run_in_executor(
                 None,
                 lambda: gmaps.places(query=search_query)
             )
-
             results = places.get("results", [])
-
             if results:
-
                 name = results[0].get("name")
                 address = results[0].get("formatted_address")
+                return PlainTextResponse(f"id_list_message=t-מצאתי את {name} בכתובת {address}")
 
-                return PlainTextResponse(
-                    f"id_list_message=t-מצאתי את {name} בכתובת {address}"
-                )
-
-            return PlainTextResponse(
-                "id_list_message=t-לא מצאתי את המקום"
-            )
+            return PlainTextResponse("id_list_message=t-לא מצאתי את המקום")
 
         elif dtmf_input == "5":
+            ai_response = smart_trim(f"תשובת המערכת עבור {search_query}")
+            return PlainTextResponse(f"id_list_message=t-{ai_response}")
 
-            ai_response = smart_trim(
-                f"תשובת המערכת עבור {search_query}"
-            )
-
-            return PlainTextResponse(
-                f"id_list_message=t-{ai_response}"
-            )
-
-    return PlainTextResponse(
-        "id_list_message=t-חזרה לתפריט הראשי"
-    )
-
+    return PlainTextResponse("id_list_message=t-חזרה לתפריט הראשי")
 # --------------------------------------------------
 # Speech To Text
 # --------------------------------------------------
