@@ -51,6 +51,10 @@ app = FastAPI(title="Advanced Audio Search API", lifespan=lifespan)
 async def health_check():
     return {"status": "ok"}
 
+@app.head("/")
+async def health_check_head():
+    return {}
+
 # --------------------------------------------------
 # Config
 # --------------------------------------------------
@@ -311,19 +315,17 @@ async def ivr(
     # --------------------------------------------------
 
     if params.get("mode") == "3" and dtmf_input == "1":
+    if not results or not results[0]:
+        logger.warning("No YouTube results found for 'שירים חדשים 2025'")
+        return PlainTextResponse("id_list_message=t-לא נמצאו שירים חדשים.")
 
-        results = await search_youtube("שירים חדשים 2025")
+    # יש תוצאה
+    info = await extract_audio_info(results[0]['video_id'])
+    if info and "url" in info:
+        return PlainTextResponse(f"playfile={info['url']}")
 
-        if results:
-
-            info = await extract_audio_info(results[0]['video_id'])
-
-            if info and "url" in info:
-                return PlainTextResponse(f"playfile={info['url']}")
-
-        return PlainTextResponse(
-            "id_list_message=t-לא נמצאו שירים חדשים"
-        )
+    # fallback אם לא הצלחנו לקבל URL
+    return PlainTextResponse("id_list_message=t-לא נמצאו שירים חדשים")
 
     # --------------------------------------------------
     # חיפוש קולי יוטיוב
