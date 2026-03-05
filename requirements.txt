@@ -11,3 +11,4 @@ googlemaps
 gTTS
 geopy
 spotipy
+aiofiles
